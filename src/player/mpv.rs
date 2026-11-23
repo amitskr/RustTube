@@ -566,6 +566,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires libmpv runtime installed on host"]
     fn test_mpv_available() {
         assert!(available(), "libmpv should be available and loadable: {:?}", lib().err());
     }

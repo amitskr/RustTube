@@ -82,6 +82,7 @@ jobs:
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
+        continue-on-error: true
         with:
           subject-path: "dist/*"
 
@@ -108,7 +109,5 @@ jobs:
             echo
             echo '```'
             cat dist/SHA256SUMS.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
