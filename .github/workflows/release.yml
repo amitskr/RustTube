@@ -85,7 +85,7 @@ jobs:
         with:
           subject-path: "dist/*"
 
-      - name: Draft release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -94,24 +94,21 @@ jobs:
         run: |
           pre=()
           case "$VERSION" in *-*) pre=(--prerelease) ;; esac
-          if state=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
-            if [ "$state" != "true" ]; then
-              echo "::error::release $TAG is already published; its files can't be replaced"
-              exit 1
-            fi
-            # a draft written by hand keeps its notes and gets the files
+          if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
           else
-            gh release create "$TAG" dist/* --draft --verify-tag "${pre[@]}" \
+            gh release create "$TAG" dist/* --verify-tag "${pre[@]}" \
               --title "RustTube $VERSION" --generate-notes
           fi
 
           {
-            echo "### Draft release $TAG is ready"
+            echo "### Release $TAG is ready"
             echo
-            echo "Check the notes and publish it from the Releases page."
+            echo "Artifacts uploaded to release $TAG:"
             echo
             echo '```'
             cat dist/SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
