@@ -80,8 +80,15 @@ struct Fns {
 }
 
 fn lib() -> Result<&'static (Library, Fns)> {
-    static LIB: std::sync::OnceLock<Result<(Library, Fns), String>> = std::sync::OnceLock::new();
-    LIB.get_or_init(|| unsafe {
+    static LIB: parking_lot::RwLock<Option<&'static (Library, Fns)>> = parking_lot::RwLock::new(None);
+    if let Some(loaded) = *LIB.read() {
+        return Ok(loaded);
+    }
+    let mut write = LIB.write();
+    if let Some(loaded) = *write {
+        return Ok(loaded);
+    }
+    unsafe {
         let mut candidates: Vec<std::path::PathBuf> = Vec::new();
         if let Ok(exe) = std::env::current_exe() {
             if let Some(d) = exe.parent() {
@@ -130,7 +137,7 @@ fn lib() -> Result<&'static (Library, Fns)> {
                 Ok(l) => {
                     macro_rules! sym {
                         ($n:literal) => {
-                            *l.get(concat!($n, "\0").as_bytes()).map_err(|e| e.to_string())?
+                            *l.get(concat!($n, "\0").as_bytes()).map_err(|e| anyhow!("{e}"))?
                         };
                     }
                     let fns = Fns {
@@ -154,15 +161,21 @@ fn lib() -> Result<&'static (Library, Fns)> {
                         rc_render: sym!("mpv_render_context_render"),
                         rc_free: sym!("mpv_render_context_free"),
                     };
-                    return Ok((l, fns));
+                    let boxed = Box::leak(Box::new((l, fns)));
+                    *write = Some(boxed);
+                    return Ok(boxed);
                 }
                 Err(e) => last_err = format!("{}: {e}", c.display()),
             }
         }
-        Err(last_err)
-    })
-    .as_ref()
-    .map_err(|e| anyhow!("{e}"))
+        if cfg!(target_os = "macos") {
+            anyhow::bail!("libmpv was not found ({last_err}). Please install it with 'brew install mpv' in Terminal and retry.");
+        } else if cfg!(windows) {
+            anyhow::bail!("libmpv-2.dll was not found ({last_err})");
+        } else {
+            anyhow::bail!("libmpv was not found. Please install the libmpv package for your distribution ({last_err})");
+        }
+    }
 }
 
 pub fn available() -> bool {
@@ -546,4 +559,14 @@ fn err_str(rc: c_int) -> String {
         .ok()
         .map(|(_, f)| unsafe { CStr::from_ptr((f.error_string)(rc)).to_string_lossy().into_owned() })
         .unwrap_or_else(|| rc.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mpv_available() {
+        assert!(available(), "libmpv should be available and loadable: {:?}", lib().err());
+    }
 }
