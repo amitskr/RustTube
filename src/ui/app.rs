@@ -1679,12 +1679,10 @@ impl AppView {
                             .id("logo")
                             .flex()
                             .items_center()
-                            .gap_1()
                             .ml_2()
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, window, cx| this.go(Route::Home, window, cx)))
-                            .child(crate::ui::logo(px(28.)))
-                            .child(crate::ui::wordmark(cx)),
+                            .child(crate::ui::brand_logo(px(24.), cx)),
                     ),
             )
             // only the empty gaps move the window: gpui reports the first matching control
@@ -2240,7 +2238,7 @@ impl AppView {
                             |d, t| d.opacity(0.25 + 0.55 * t),
                         ),
                     )
-                    .child(crate::ui::logo(px(64.))),
+                    .child(crate::ui::app_icon(px(64.))),
             )
             .child(
                 div()

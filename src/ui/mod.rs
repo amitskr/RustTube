@@ -392,11 +392,23 @@ pub fn copy_to_clipboard(text: String, cx: &mut App) {
 pub const BRAND_PINK: u32 = 0xF0307E;
 pub const BRAND_VIOLET: u32 = 0x7A3CF5;
 
-/// The Stream Tube app logo.
-/// The logo, in the current accent colour.
+/// The RustTube in-app brand logo (Rust text + orange Tube badge).
+/// Automatically adapts to dark and light mode.
+pub fn brand_logo(height: Pixels, cx: &App) -> Img {
+    let p = pal(cx);
+    let width = height * 3.49;
+    let asset = if p.dark { "brand/rusttube-dark.png" } else { "brand/rusttube-light.png" };
+    img(SharedString::from(asset)).h(height).w(width).flex_none()
+}
+
+/// The RustTube squircle app icon.
+pub fn app_icon(size: Pixels) -> Img {
+    img(SharedString::from("brand/app-icon.png")).size(size).flex_none()
+}
+
+/// App logo icon.
 pub fn logo(size: Pixels) -> Img {
-    let accent = app_icon::icon_accent(crate::store::settings_snapshot().accent);
-    img(SharedString::from(format!("brand/logo-{accent:06x}.svg"))).size(size).flex_none()
+    app_icon(size)
 }
 
 /// "RustTube" wordmark next to the logo.
