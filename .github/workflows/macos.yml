@@ -1,0 +1,46 @@
+name: macOS build
+
+on:
+  push:
+    branches: [main]
+    paths: ["src/**", "Cargo.toml", "Cargo.lock", "build.rs", "assets/**", "packaging/macos/**", ".github/workflows/macos.yml"]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build & Test
+        run: |
+          cargo build --release --locked
+          cargo test --release --locked
+
+      - name: Package macOS App & DMG
+        id: pkg
+        run: |
+          chmod +x packaging/macos/bundle.sh packaging/macos/make_icns.sh
+          ./packaging/macos/bundle.sh release
+
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          # Also create a compressed tarball of the .app
+          tar -czf "dist/RustTube-${VERSION}-macos.tar.gz" -C dist RustTube.app
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: |
+            dist/*.dmg
+            dist/*.tar.gz
+          if-no-files-found: error

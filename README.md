@@ -1,17 +1,16 @@
 <p align="center">
-  <img src="assets/logo.png" alt="Stream Tube" width="120">
+  <img src="assets/logo.png" alt="RustTube" width="120">
 </p>
 
-<h1 align="center">Stream Tube</h1>
+<h1 align="center">RustTube</h1>
 
 <p align="center">
-  A native YouTube client for Windows and Linux, written in Rust.<br>
+  A native YouTube client for macOS, Windows and Linux, written in Rust.<br>
   No browser, no ads, no tracking. SponsorBlock, DeArrow and Return YouTube Dislike built in.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D6" alt="Windows and Linux">
-  <img src="https://img.shields.io/github/v/release/Avaneesh-Inamdar/Stream-Tube-Desktop?include_prereleases&label=release" alt="Latest release">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-0078D6" alt="macOS, Windows and Linux">
   <img src="https://img.shields.io/badge/built%20with-Rust-B7410E" alt="Rust">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
 </p>
@@ -145,11 +144,25 @@ the GPU like the browser does. Results depend on the video, resolution and hardw
 Get the latest build from the [Releases page](https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/releases).
 This is an early alpha, so expect rough edges.
 
+**macOS (Apple Silicon & Intel)**: download `RustTube-<version>-macos.dmg`, open it, and drag `RustTube.app` to your Applications folder. Alternatively, download and extract `RustTube-<version>-macos.tar.gz`.
+
+Video playback is powered by `libmpv`. Install it via [Homebrew](https://brew.sh):
+
+```sh
+brew install mpv
+```
+
+*(Optional for downloads and fallback extraction)*:
+
+```sh
+brew install yt-dlp ffmpeg
+```
+
 **Windows 10/11 (64-bit)**: run `StreamTube-<version>-setup.exe`. It installs for
 your user only, so no administrator prompt, and the app updates itself when a new
 release comes out (*Settings → About*).
 To run it without installing, unzip `StreamTube-<version>-windows-x64.zip` and run
-`streamtube.exe`.
+`rusttube.exe`.
 
 **Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
 
@@ -212,16 +225,24 @@ You need:
 
 Then:
 
-```powershell
-git clone https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop.git
-cd Stream-Tube-Desktop
+```sh
+# Clone your fork
+git clone https://github.com/<your-username>/RustTube.git
+cd RustTube
+
+# Build the release binary
 cargo build --release
 ```
 
-The executable ends up at `target\release\streamtube.exe`. To run it somewhere
-else, copy `libmpv-2.dll` next to it.
+**macOS app bundle & DMG**:
+```sh
+# Bundle RustTube.app and build RustTube-<version>-macos.dmg:
+./packaging/macos/bundle.sh release
+```
 
-To build the installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
+The executable ends up at `target/release/rusttube` (or `target\release\rusttube.exe` on Windows).
+
+To build the Windows installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
 ISCC.exe /DAppVersion=0.5.1-alpha installer\streamtube.iss
@@ -232,11 +253,13 @@ It lands in `dist\`. On Linux, install the packages listed in
 
 ## Where things are stored
 
-Settings, history and subscriptions go in `%APPDATA%\StreamTube\streamtube.db` on
-Windows and `~/.local/share/StreamTube/streamtube.db` on Linux. Set `STREAMTUBE_DATA_DIR`
-to keep them somewhere else (for example a portable copy).
-If you used the app back when it was called Ferrotube, your old data is moved
-over automatically on first launch.
+Settings, history and subscriptions go in:
+- macOS: `~/Library/Application Support/RustTube/rusttube.db`
+- Windows: `%APPDATA%\RustTube\rusttube.db`
+- Linux: `~/.local/share/RustTube/rusttube.db`
+
+Set `RUSTTUBE_DATA_DIR` (or `STREAMTUBE_DATA_DIR`) to keep them somewhere else (for example a portable copy).
+If you used the app previously as StreamTube or Ferrotube, your data and database are migrated over automatically on first launch.
 
 ## Project layout
 

@@ -1652,7 +1652,8 @@ impl AppView {
             .flex_none()
             .items_center()
             .h(px(56.))
-            .pl_4()
+            .when(cfg!(target_os = "macos"), |d| d.pl(px(78.)))
+            .when(!cfg!(target_os = "macos"), |d| d.pl_4())
             .bg(p.bg)
             .child(
                 div()
@@ -1797,7 +1798,7 @@ impl AppView {
                     .child(icon_button("settings", "settings", cx).on_click(cx.listener(|this, _, window, cx| this.go(Route::Settings, window, cx))))
                     .child(self.account_button(cx))
                     .child(div().id("drag-c").w_3().h(px(56.)).window_control_area(WindowControlArea::Drag))
-                    .child(window_controls(maximized, cx)),
+                    .when(!cfg!(target_os = "macos"), |d| d.child(window_controls(maximized, cx))),
             )
     }
 
@@ -2848,7 +2849,11 @@ pub fn reveal_in_folder(path: &str, cx: &mut App) {
     {
         let _ = std::process::Command::new("explorer").arg(format!("/select,{path}")).spawn();
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         if let Some(d) = std::path::Path::new(path).parent() {
             let _ = open::that(d);

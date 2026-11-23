@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>rusttube</string>
+    <key>CFBundleIconFile</key>
+    <string>rusttube.icns</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.rusttube.RustTube</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>RustTube</string>
+    <key>CFBundleDisplayName</key>
+    <string>RustTube</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.5.1-alpha</string>
+    <key>CFBundleVersion</key>
+    <string>0.5.1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>RustTube URL</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>rusttube</string>
+                <string>streamtube</string>
+                <string>vnd.youtube</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

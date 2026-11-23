@@ -56,8 +56,12 @@ jobs:
     with:
       package: true
 
+  macos:
+    needs: check
+    uses: ./.github/workflows/macos.yml
+
   publish:
-    needs: [check, linux, windows]
+    needs: [check, linux, windows, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write       # create the draft release and upload its files
@@ -99,7 +103,7 @@ jobs:
             gh release upload "$TAG" dist/* --clobber
           else
             gh release create "$TAG" dist/* --draft --verify-tag "${pre[@]}" \
-              --title "Stream Tube $VERSION" --generate-notes
+              --title "RustTube $VERSION" --generate-notes
           fi
 
           {

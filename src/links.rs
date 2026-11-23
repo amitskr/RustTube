@@ -4,12 +4,17 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;
 
-/// Turns a `streamtube:` link back into the YouTube URL it wraps.
-/// Accepts `streamtube://open?url=<encoded>`, `streamtube:https://…` and
-/// `streamtube://www.youtube.com/watch?v=…`; anything else is returned unchanged.
+/// Turns a `rusttube:` (or legacy `streamtube:`) link back into the YouTube URL it wraps.
+/// Accepts `rusttube://open?url=<encoded>`, `rusttube:https://…` and
+/// `rusttube://www.youtube.com/watch?v=…`; anything else is returned unchanged.
 pub fn normalize(arg: &str) -> String {
     let a = arg.trim().trim_matches('"');
-    let Some(rest) = a.strip_prefix("streamtube:").or_else(|| a.strip_prefix("STREAMTUBE:")) else {
+    let Some(rest) = a
+        .strip_prefix("rusttube:")
+        .or_else(|| a.strip_prefix("RUSTTUBE:"))
+        .or_else(|| a.strip_prefix("streamtube:"))
+        .or_else(|| a.strip_prefix("STREAMTUBE:"))
+    else {
         return a.to_string();
     };
     let rest = rest.trim_start_matches('/');
@@ -54,7 +59,7 @@ pub fn forward_to_running(arg: &str) -> bool {
     }
     #[cfg(not(windows))]
     let _ = pid;
-    if stream.write_all(format!("STREAMTUBE {}\n", arg.replace('\n', " ")).as_bytes()).is_err() {
+    if stream.write_all(format!("RUSTTUBE {}\n", arg.replace('\n', " ")).as_bytes()).is_err() {
         return false;
     }
     let mut reply = String::new();
@@ -76,7 +81,10 @@ pub fn listen() -> Option<futures::channel::mpsc::UnboundedReceiver<String>> {
                 continue;
             }
             // only our own launches speak this
-            let Some(arg) = line.trim_end().strip_prefix("STREAMTUBE ") else { continue };
+            let trimmed = line.trim_end();
+            let Some(arg) = trimmed.strip_prefix("RUSTTUBE ").or_else(|| trimmed.strip_prefix("STREAMTUBE ")) else {
+                continue;
+            };
             let _ = (&stream).write_all(b"ok\n");
             if tx.unbounded_send(arg.to_string()).is_err() {
                 break;
@@ -92,6 +100,8 @@ mod tests {
 
     #[test]
     fn scheme_links() {
+        assert_eq!(normalize("rusttube://open?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc"), "https://www.youtube.com/watch?v=abc");
+        assert_eq!(normalize("rusttube:https://youtu.be/abc"), "https://youtu.be/abc");
         assert_eq!(normalize("streamtube://open?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc"), "https://www.youtube.com/watch?v=abc");
         assert_eq!(normalize("streamtube:https://youtu.be/abc"), "https://youtu.be/abc");
         assert_eq!(normalize("streamtube://https:/youtu.be/abc"), "https://youtu.be/abc");

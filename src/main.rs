@@ -81,7 +81,7 @@ fn main() {
             player::controller::init(cx);
             let opts = WindowOptions {
                 window_bounds: Some(saved_window_bounds(cx)),
-                titlebar: Some(TitlebarOptions { title: Some("Stream Tube".into()), appears_transparent: true, ..Default::default() }),
+                titlebar: Some(TitlebarOptions { title: Some("RustTube".into()), appears_transparent: true, ..Default::default() }),
                 window_min_size: Some(size(px(720.), px(480.))),
                 ..Default::default()
             };

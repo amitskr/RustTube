@@ -95,10 +95,27 @@ fn lib() -> Result<&'static (Library, Fns)> {
                         candidates.push(p);
                     }
                 }
+                // macOS app bundle: RustTube.app/Contents/Frameworks
+                #[cfg(target_os = "macos")]
+                for name in ["libmpv.2.dylib", "libmpv.dylib"] {
+                    let p = d.join("../Frameworks").join(name);
+                    if p.is_file() {
+                        candidates.push(p);
+                    }
+                }
             }
         }
         #[cfg(windows)]
         candidates.push(std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/third_party/mpv/libmpv-2.dll")));
+        #[cfg(target_os = "macos")]
+        {
+            candidates.push(std::path::PathBuf::from("/opt/homebrew/lib/libmpv.2.dylib"));
+            candidates.push(std::path::PathBuf::from("/opt/homebrew/lib/libmpv.dylib"));
+            candidates.push(std::path::PathBuf::from("/usr/local/lib/libmpv.2.dylib"));
+            candidates.push(std::path::PathBuf::from("/usr/local/lib/libmpv.dylib"));
+            candidates.push(std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/third_party/mpv/libmpv.2.dylib")));
+            candidates.push(std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/third_party/mpv/libmpv.dylib")));
+        }
         candidates.push("libmpv-2.dll".into());
         candidates.push("mpv-2.dll".into());
         candidates.push("libmpv.so.2".into());
@@ -106,6 +123,7 @@ fn lib() -> Result<&'static (Library, Fns)> {
         candidates.push("libmpv.so.1".into());
         candidates.push("libmpv.so".into());
         candidates.push("libmpv.2.dylib".into());
+        candidates.push("libmpv.dylib".into());
         let mut last_err = String::from("libmpv not found");
         for c in candidates {
             match Library::new(&c) {

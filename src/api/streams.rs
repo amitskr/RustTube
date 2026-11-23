@@ -496,6 +496,11 @@ fn find_ytdlp(custom: &str) -> Option<String> {
     if p.is_file() {
         candidates.push(p.to_string_lossy().into_owned());
     }
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push("/opt/homebrew/bin/yt-dlp".into());
+        candidates.push("/usr/local/bin/yt-dlp".into());
+    }
     candidates.push("yt-dlp".into());
     for c in candidates {
         let mut cmd = Command::new(&c);

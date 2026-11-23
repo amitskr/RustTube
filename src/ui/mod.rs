@@ -399,7 +399,7 @@ pub fn logo(size: Pixels) -> Img {
     img(SharedString::from(format!("brand/logo-{accent:06x}.svg"))).size(size).flex_none()
 }
 
-/// "Stream Tube" wordmark next to the logo.
+/// "RustTube" wordmark next to the logo.
 pub fn wordmark(cx: &App) -> Div {
     let p = pal(cx);
     div()
@@ -408,6 +408,6 @@ pub fn wordmark(cx: &App) -> Div {
         .gap(px(5.))
         .text_lg()
         .font_weight(FontWeight::BOLD)
-        .child(div().text_color(p.text).child("Stream"))
+        .child(div().text_color(p.text).child("Rust"))
         .child(div().text_color(p.accent).child("Tube"))
 }

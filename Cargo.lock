@@ -5565,6 +5565,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusttube"
+version = "0.5.1-alpha"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "dirs 6.0.0",
+ "embed-resource",
+ "futures",
+ "gpui-kit",
+ "image",
+ "libloading 0.9.1",
+ "open",
+ "parking_lot",
+ "rand 0.9.5",
+ "raw-window-handle",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2 0.11.1",
+ "smallvec",
+ "tungstenite",
+ "ureq",
+]
+
+[[package]]
 name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6083,33 +6110,6 @@ name = "str_indices"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d08889ec5408683408db66ad89e0e1f93dff55c73a4ccc71c427d5b277ee47e6"
-
-[[package]]
-name = "streamtube"
-version = "0.5.1-alpha"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "dirs 6.0.0",
- "embed-resource",
- "futures",
- "gpui-kit",
- "image",
- "libloading 0.9.1",
- "open",
- "parking_lot",
- "rand 0.9.5",
- "raw-window-handle",
- "rusqlite",
- "serde",
- "serde_json",
- "sha1",
- "sha2 0.11.1",
- "smallvec",
- "tungstenite",
- "ureq",
-]
 
 [[package]]
 name = "strict-num"

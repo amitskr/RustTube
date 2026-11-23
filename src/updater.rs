@@ -85,6 +85,8 @@ fn pick_asset(assets: &[Value]) -> Option<Asset> {
         let n = name.to_ascii_lowercase();
         if cfg!(windows) {
             n.ends_with(".exe") && n.contains("setup")
+        } else if cfg!(target_os = "macos") {
+            n.ends_with(".dmg") || (n.contains("macos") && n.ends_with(".tar.gz"))
         } else {
             n.contains("linux") && (n.ends_with(".tar.gz") || n.ends_with(".appimage"))
         }
@@ -310,7 +312,13 @@ mod tests {
 
     #[test]
     fn assets_come_from_this_repo_with_a_checksum() {
-        let ext = if cfg!(windows) { "setup.exe" } else { "linux-x86_64.tar.gz" };
+        let ext = if cfg!(windows) {
+            "setup.exe"
+        } else if cfg!(target_os = "macos") {
+            "macos.dmg"
+        } else {
+            "linux-x86_64.tar.gz"
+        };
         let asset = |name: &str, url: &str| {
             serde_json::json!({ "name": name, "browser_download_url": url, "size": 5, "digest": format!("sha256:{}", "AB".repeat(32)) })
         };

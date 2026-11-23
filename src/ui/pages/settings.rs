@@ -1014,8 +1014,8 @@ impl SettingsPage {
         let s = store::settings_snapshot();
         let mpv = crate::player::mpv::available();
         card(cx)
-            .child(row("Stream Tube", &format!("Version {}", env!("CARGO_PKG_VERSION")), div(), cx))
-            .child(row("Video engine", if mpv { "libmpv" } else if cfg!(windows) { "libmpv-2.dll not found" } else { "libmpv not found (install the libmpv package)" }, div(), cx))
+            .child(row("RustTube", &format!("Version {}", env!("CARGO_PKG_VERSION")), div(), cx))
+            .child(row("Video engine", if mpv { "libmpv" } else if cfg!(windows) { "libmpv-2.dll not found" } else if cfg!(target_os = "macos") { "libmpv not found (run: brew install mpv)" } else { "libmpv not found (install the libmpv package)" }, div(), cx))
             .child(row("yt-dlp", self.ytdlp_version.as_deref().unwrap_or("not installed"), div(), cx))
             .child({
                 use crate::updater::Status;

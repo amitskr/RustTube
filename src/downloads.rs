@@ -775,7 +775,17 @@ pub fn fetch_ffmpeg(cx: &mut App) {
 
 static YTDLP_FETCHING: AtomicBool = AtomicBool::new(false);
 
-const YTDLP_ASSET: (&str, &str, &str) = ("yt-dlp/yt-dlp", "latest", if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp_linux" });
+const YTDLP_ASSET: (&str, &str, &str) = (
+    "yt-dlp/yt-dlp",
+    "latest",
+    if cfg!(windows) {
+        "yt-dlp.exe"
+    } else if cfg!(target_os = "macos") {
+        "yt-dlp_macos"
+    } else {
+        "yt-dlp_linux"
+    },
+);
 
 /// Downloads yt-dlp into the data folder, then starts the downloads waiting for it.
 pub fn fetch_ytdlp(cx: &mut App) {

@@ -35,7 +35,10 @@ pub fn choose() {
         // only one of them is available: nothing to choose
         return;
     }
-    let forced = std::env::var("STREAMTUBE_BACKEND").unwrap_or_default().to_lowercase();
+    let forced = std::env::var("RUSTTUBE_BACKEND")
+        .or_else(|_| std::env::var("STREAMTUBE_BACKEND"))
+        .unwrap_or_default()
+        .to_lowercase();
     let setting = crate::store::settings_snapshot().display_server.clone();
     let use_x11 = match forced.as_str() {
         "x11" => true,

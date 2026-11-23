@@ -275,22 +275,33 @@ pub fn data_dir() -> PathBuf {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
         // a separate profile (portable use, clean test runs)
-        if let Some(d) = std::env::var_os("STREAMTUBE_DATA_DIR").filter(|d| !d.is_empty()) {
+        if let Some(d) = std::env::var_os("RUSTTUBE_DATA_DIR")
+            .or_else(|| std::env::var_os("STREAMTUBE_DATA_DIR"))
+            .filter(|d| !d.is_empty())
+        {
             let d = PathBuf::from(d);
             let _ = std::fs::create_dir_all(&d);
             return d;
         }
         let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-        let d = base.join("StreamTube");
-        // carry over data from the app's previous name
-        let old = base.join("Ferrotube");
-        if !d.exists() && old.exists() {
-            let _ = std::fs::rename(&old, &d);
+        let d = base.join("RustTube");
+        // carry over data from previous names (StreamTube, Ferrotube)
+        for old_name in ["StreamTube", "Ferrotube"] {
+            let old = base.join(old_name);
+            if !d.exists() && old.exists() {
+                let _ = std::fs::rename(&old, &d);
+                break;
+            }
         }
         let _ = std::fs::create_dir_all(&d);
-        if !d.join("streamtube.db").exists() && d.join("ferrotube.db").exists() {
-            for ext in ["", "-wal", "-shm"] {
-                let _ = std::fs::rename(d.join(format!("ferrotube.db{ext}")), d.join(format!("streamtube.db{ext}")));
+        if !d.join("rusttube.db").exists() {
+            for prev in ["streamtube.db", "ferrotube.db"] {
+                if d.join(prev).exists() {
+                    for ext in ["", "-wal", "-shm"] {
+                        let _ = std::fs::rename(d.join(format!("{prev}{ext}")), d.join(format!("rusttube.db{ext}")));
+                    }
+                    break;
+                }
             }
         }
         d
@@ -301,7 +312,7 @@ pub fn data_dir() -> PathBuf {
 fn db() -> &'static Mutex<Connection> {
     static DB: OnceLock<Mutex<Connection>> = OnceLock::new();
     DB.get_or_init(|| {
-        let conn = Connection::open(data_dir().join("streamtube.db")).expect("open db");
+        let conn = Connection::open(data_dir().join("rusttube.db")).expect("open db");
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);

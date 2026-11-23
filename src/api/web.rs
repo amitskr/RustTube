@@ -193,6 +193,33 @@ fn find_browser() -> Option<(String, PathBuf)> {
         ];
         candidates.into_iter().map(|(n, p)| (n.to_string(), PathBuf::from(p))).find(|(_, p)| p.is_file())
     }
+    #[cfg(target_os = "macos")]
+    {
+        let candidates = [
+            ("Google Chrome", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            ("Brave", "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+            ("Microsoft Edge", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+            ("Chromium", "/Applications/Chromium.app/Contents/MacOS/Chromium"),
+            ("Vivaldi", "/Applications/Vivaldi.app/Contents/MacOS/Vivaldi"),
+            ("Arc", "/Applications/Arc.app/Contents/MacOS/Arc"),
+        ];
+        if let Some(user_home) = dirs::home_dir() {
+            let user_candidates = [
+                ("Google Chrome", user_home.join("Applications/Google Chrome.app/Contents/MacOS/Google Chrome")),
+                ("Brave", user_home.join("Applications/Brave Browser.app/Contents/MacOS/Brave Browser")),
+                ("Microsoft Edge", user_home.join("Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")),
+                ("Chromium", user_home.join("Applications/Chromium.app/Contents/MacOS/Chromium")),
+                ("Vivaldi", user_home.join("Applications/Vivaldi.app/Contents/MacOS/Vivaldi")),
+                ("Arc", user_home.join("Applications/Arc.app/Contents/MacOS/Arc")),
+            ];
+            if let Some((n, p)) = user_candidates.into_iter().find(|(_, p)| p.is_file()) {
+                return Some((n.to_string(), p));
+            }
+        }
+        if let Some((n, p)) = candidates.into_iter().map(|(n, p)| (n.to_string(), PathBuf::from(p))).find(|(_, p)| p.is_file()) {
+            return Some((n, p));
+        }
+    }
     #[cfg(not(windows))]
     {
         let names = [
