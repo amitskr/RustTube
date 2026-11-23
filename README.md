@@ -24,7 +24,7 @@
 I wanted YouTube on my desktop without keeping a browser tab open, and without the
 ads, autoplaying junk and sponsor reads. The existing options were either Electron
 apps that eat a gigabyte of RAM or web frontends that break every other week.
-Stream Tube is a single native app: the UI is drawn on the GPU with
+RustTube is a single native app: the UI is drawn on the GPU with
 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), and video
 goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 
@@ -75,7 +75,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Subscriptions can live locally. The feed is built by fetching each channel directly, no account needed
 - Or sign in with your Google account to get your own Home feed, subscriptions, playlists, likes and subscribe button
 - Watch history and search history from your other devices sync in, with resume positions, and single entries can be removed
-- Connect your YouTube history (*Settings → General*) and it works the other way too: videos you watch in Stream Tube show up in your YouTube history, and your phone or TV resumes them where you stopped. You sign in once in a browser window with a fresh profile (Chrome, Edge, Brave or Chromium) that closes and is deleted afterwards, or load a `cookies.txt` file instead
+- Connect your YouTube history (*Settings → General*) and it works the other way too: videos you watch in RustTube show up in your YouTube history, and your phone or TV resumes them where you stopped. You sign in once in a browser window with a fresh profile (Chrome, Edge, Brave or Chromium) that closes and is deleted afterwards, or load a `cookies.txt` file instead
 - History, watch later, favourites and playlists are stored in a local SQLite database, and you can pause or clear history at any time
 - Import from YouTube Takeout, NewPipe, FreeTube or OPML. Export to NewPipe JSON, YouTube CSV, OPML or a full backup
 
@@ -89,7 +89,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - IPv4-only mode, and a choice of playback client (visionOS, Android VR or yt-dlp) if videos ever stop loading
 
 **Looks the way you like**
-- Dark, light or follow Windows
+- Dark, light or follow system (macOS / Windows / Linux)
 - Seven accent colours used across the app, and the app icon changes colour to match, on the taskbar and on your desktop shortcuts too
 - Interface scaling, density, thumbnail corner style, grid columns, start page, language and region
 - Smooth page, dialog and menu transitions, and mouse-wheel scrolling that glides instead of jumping
@@ -99,17 +99,17 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 
 ## Performance
 
-Stream Tube versus youtube.com in Microsoft Edge (clean profile, no extensions) on
-the same Windows 11 PC, playing the same video. Numbers are the working set of
+RustTube versus youtube.com in Microsoft Edge (clean profile, no extensions) on
+the same PC, playing the same video. Numbers are the working set of
 every process involved, after browsing a few pages.
 
-| | youtube.com in Edge | Stream Tube 0.4.0-alpha |
+| | youtube.com in Edge | RustTube |
 |---|---|---|
 | Processes | 11–12 | 1 |
 | RAM, idle on Home | 1,073 MB | **~405 MB** |
 | RAM, playing a video | 1,203 MB | **~565 MB** |
 
-Stream Tube uses less than half the RAM of the browser, and it stays flat as you
+RustTube uses less than half the RAM of the browser, and it stays flat as you
 browse: thumbnails are kept at the size they're drawn and the ones you've scrolled
 past are freed. While playing, part of the memory is a read-ahead buffer that keeps
 seeking instant. Turn on *Settings → Player → Hardware decoding* to decode video on
@@ -141,50 +141,49 @@ the GPU like the browser does. Results depend on the video, resolution and hardw
 
 ## Install
 
-Get the latest build from the [Releases page](https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/releases).
+Get the latest build from the [Releases page](https://github.com/amitskr/RustTube/releases).
 This is an early alpha, so expect rough edges.
 
-**macOS (Apple Silicon & Intel)**: download `RustTube-<version>-macos.dmg`, open it, and drag `RustTube.app` to your Applications folder. Alternatively, download and extract `RustTube-<version>-macos.tar.gz`.
+**macOS (Apple Silicon & Intel)**:
+1. Download `RustTube-<version>-macos.dmg`.
+2. Open the DMG and drag `RustTube.app` to your Applications folder.
+   *(Alternatively, download and unpack `RustTube-<version>-macos.tar.gz`).*
+3. Install `libmpv` (required for video decoding and audio playback) via [Homebrew](https://brew.sh):
+   ```sh
+   brew install mpv
+   ```
+4. *(Optional, for high-res downloads)*:
+   ```sh
+   brew install yt-dlp ffmpeg
+   ```
 
-Video playback is powered by `libmpv`. Install it via [Homebrew](https://brew.sh):
-
-```sh
-brew install mpv
-```
-
-*(Optional for downloads and fallback extraction)*:
-
-```sh
-brew install yt-dlp ffmpeg
-```
-
-**Windows 10/11 (64-bit)**: run `StreamTube-<version>-setup.exe`. It installs for
+**Windows 10/11 (64-bit)**: run `RustTube-<version>-setup.exe`. It installs for
 your user only, so no administrator prompt, and the app updates itself when a new
 release comes out (*Settings → About*).
-To run it without installing, unzip `StreamTube-<version>-windows-x64.zip` and run
+To run it without installing, unzip `RustTube-<version>-windows-x64.zip` and run
 `rusttube.exe`.
 
 **Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
 
 ```sh
-sudo apt install ./streamtube_0.5.1-alpha_amd64.deb
+sudo apt install ./rusttube_0.5.1-alpha_amd64.deb
 ```
 
 **Fedora, openSUSE**: install the `.rpm`:
 
 ```sh
-sudo dnf install ./streamtube-0.5.1-alpha.x86_64.rpm
+sudo dnf install ./rusttube-0.5.1-alpha.x86_64.rpm
 ```
 
 **Any Linux (x86_64), nothing to install**: download the AppImage, make it executable
 and run it. libmpv is inside, so video plays without installing anything else:
 
 ```sh
-chmod +x StreamTube-0.5.1-alpha-x86_64.AppImage
-./StreamTube-0.5.1-alpha-x86_64.AppImage
+chmod +x RustTube-0.5.1-alpha-x86_64.AppImage
+./RustTube-0.5.1-alpha-x86_64.AppImage
 ```
 
-**Other Linux (x86_64), installed for your user**: unpack `StreamTube-<version>-linux-x86_64.tar.gz` and run
+**Other Linux (x86_64), installed for your user**: unpack `RustTube-<version>-linux-x86_64.tar.gz` and run
 `./install.sh`. It puts the app in `~/.local/bin` and adds a menu entry.
 Video plays through libmpv, so install it if you don't have it:
 
@@ -195,7 +194,7 @@ sudo pacman -S mpv            # Arch
 ```
 
 Downloads above 360p need yt-dlp and FFmpeg. On Windows the app offers to fetch
-both the first time you need them. On Linux, install them with your package manager.
+both the first time you need them. On Linux and macOS, install them with your package manager.
 
 ### Verifying a download
 
@@ -205,7 +204,7 @@ and each file has a signed build provenance attestation that ties it to the work
 run that built it. With the [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify StreamTube-0.5.1-alpha-setup.exe --repo Avaneesh-Inamdar/Stream-Tube-Desktop
+gh attestation verify RustTube-0.5.1-alpha-macos.dmg --repo amitskr/RustTube
 ```
 
 Releases are immutable once published, so their files can't be swapped afterwards.
@@ -216,9 +215,10 @@ The in-app updater also checks the installer's SHA-256 before running it.
 You need:
 
 - **Rust 1.85 or newer** (the crate uses the 2024 edition). Get it from [rustup.rs](https://rustup.rs).
-- **libmpv** — download a `mpv-dev-x86_64` archive from
-  [shinchiro's mpv builds](https://github.com/shinchiro/mpv-winbuild-cmake/releases)
-  and put `libmpv-2.dll` in `third_party/mpv/`. It isn't in the repo because it's over 100 MB.
+- **libmpv**:
+  - macOS: `brew install mpv`
+  - Windows: download a `mpv-dev-x86_64` archive from [shinchiro's mpv builds](https://github.com/shinchiro/mpv-winbuild-cmake/releases) and put `libmpv-2.dll` in `third_party/mpv/`.
+  - Linux: install `libmpv2` / `mpv-libs`.
 - **yt-dlp** (optional, recommended) — on your `PATH`, or point to it in
   *Settings → Backend & network*. It's used for downloads and as a fallback when
   the built-in extractor can't get a stream.
@@ -227,7 +227,7 @@ Then:
 
 ```sh
 # Clone your fork
-git clone https://github.com/<your-username>/RustTube.git
+git clone https://github.com/amitskr/RustTube.git
 cd RustTube
 
 # Build the release binary
@@ -245,7 +245,7 @@ The executable ends up at `target/release/rusttube` (or `target\release\rusttube
 To build the Windows installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-ISCC.exe /DAppVersion=0.5.1-alpha installer\streamtube.iss
+ISCC.exe /DAppVersion=0.5.1-alpha installer\rusttube.iss
 ```
 
 It lands in `dist\`. On Linux, install the packages listed in
@@ -277,7 +277,7 @@ src/
 
 - YouTube sometimes answers with "Sign in to confirm you're not a bot". When that
   happens, signing in inside the app or updating yt-dlp usually fixes it.
-- Windows is the main platform. The Linux build is new and less tested; macOS isn't built yet.
+- Supported across macOS (Apple Silicon & Intel), Windows 10/11 (x64), and Linux (x86_64).
 
 ## Contributing
 
@@ -286,7 +286,7 @@ what makes a PR easy to merge, and what won't be accepted.
 
 ## Credits
 
-Stream Tube leans on a lot of other people's work:
+RustTube is a fork of [Stream-Tube-Desktop](https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop) and leans on a lot of other people's work:
 [mpv](https://mpv.io), [yt-dlp](https://github.com/yt-dlp/yt-dlp),
 [SponsorBlock](https://sponsor.ajay.app), [DeArrow](https://dearrow.ajay.app),
 [Return YouTube Dislike](https://returnyoutubedislike.com) and

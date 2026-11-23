@@ -72,9 +72,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
           # zip: the app and libmpv, to run without installing
-          $name = "StreamTube-$version-windows-x64"
+          $name = "RustTube-$version-windows-x64"
           New-Item -ItemType Directory -Force "dist/$name" | Out-Null
-          Copy-Item target/release/streamtube.exe, third_party/mpv/libmpv-2.dll, README.md "dist/$name/"
+          Copy-Item target/release/rusttube.exe, third_party/mpv/libmpv-2.dll, README.md "dist/$name/"
           Copy-Item LICENSE "dist/$name/LICENSE.txt"
           Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
           Remove-Item -Recurse "dist/$name"

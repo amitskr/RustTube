@@ -21,6 +21,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install dependencies
+        run: |
+          brew install mpv
+
       - name: Build & Test
         run: |
           cargo build --release --locked

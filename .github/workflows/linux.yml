@@ -40,13 +40,14 @@ jobs:
         id: pkg
         run: |
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          name="StreamTube-${version}-linux-x86_64"
+          name="RustTube-${version}-linux-x86_64"
           mkdir -p "dist/$name"
-          cp target/release/streamtube "dist/$name/"
-          strip "dist/$name/streamtube"
-          cp packaging/linux/streamtube.desktop packaging/linux/install.sh "dist/$name/"
+          cp target/release/rusttube "dist/$name/"
+          strip "dist/$name/rusttube"
+          cp packaging/linux/streamtube.desktop "dist/$name/rusttube.desktop"
+          cp packaging/linux/install.sh "dist/$name/"
           chmod +x "dist/$name/install.sh"
-          cp assets/logo.png "dist/$name/streamtube.png"
+          cp assets/logo.png "dist/$name/rusttube.png"
           cp LICENSE README.md "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           echo "file=dist/$name.tar.gz" >> "$GITHUB_OUTPUT"
@@ -61,26 +62,26 @@ jobs:
           pkgver=$(echo "$version" | sed 's/-/~/')
 
           root=pkgroot
-          install -Dm755 target/release/streamtube "$root/usr/bin/streamtube"
-          strip "$root/usr/bin/streamtube"
-          install -Dm644 packaging/linux/streamtube.desktop "$root/usr/share/applications/streamtube.desktop"
-          install -Dm644 assets/logo.png "$root/usr/share/icons/hicolor/256x256/apps/streamtube.png"
-          install -Dm644 assets/logo.svg "$root/usr/share/icons/hicolor/scalable/apps/streamtube.svg"
+          install -Dm755 target/release/rusttube "$root/usr/bin/rusttube"
+          strip "$root/usr/bin/rusttube"
+          install -Dm644 packaging/linux/streamtube.desktop "$root/usr/share/applications/rusttube.desktop"
+          install -Dm644 assets/logo.png "$root/usr/share/icons/hicolor/256x256/apps/rusttube.png"
+          install -Dm644 assets/logo.svg "$root/usr/share/icons/hicolor/scalable/apps/rusttube.svg"
           install -Dm644 packaging/linux/io.github.avaneesh_inamdar.StreamTube.metainfo.xml "$root/usr/share/metainfo/io.github.avaneesh_inamdar.StreamTube.metainfo.xml"
-          install -Dm644 LICENSE "$root/usr/share/doc/streamtube/LICENSE"
-          install -Dm644 README.md "$root/usr/share/doc/streamtube/README.md"
+          install -Dm644 LICENSE "$root/usr/share/doc/rusttube/LICENSE"
+          install -Dm644 README.md "$root/usr/share/doc/rusttube/README.md"
 
           # shared libraries the binary links against, as Debian package names
-          mkdir -p debian && echo "Source: streamtube" > debian/control
-          shlibs=$(dpkg-shlibdeps -O "$root/usr/bin/streamtube" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+          mkdir -p debian && echo "Source: rusttube" > debian/control
+          shlibs=$(dpkg-shlibdeps -O "$root/usr/bin/rusttube" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
           echo "linked libraries: $shlibs"
           rm -rf debian
 
           common=(
-            -s dir -C "$root" -n streamtube -v "$pkgver" -a x86_64
-            --license MIT --url "https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop"
-            --maintainer "Stream Tube <noreply@github.com>"
-            --description "Stream Tube - a fast native YouTube client with SponsorBlock, DeArrow and Return YouTube Dislike"
+            -s dir -C "$root" -n rusttube -v "$pkgver" -a x86_64
+            --license MIT --url "https://github.com/amitskr/RustTube"
+            --maintainer "RustTube <noreply@github.com>"
+            --description "RustTube - a fast native YouTube client with SponsorBlock, DeArrow and Return YouTube Dislike"
             --category video
             --after-install packaging/linux/postinst.sh --after-remove packaging/linux/postinst.sh
           )
@@ -95,8 +96,8 @@ jobs:
 
           # GitHub turns "~" in asset names into "."; the file names use the plain
           # version, the package metadata keeps "~" so upgrades sort correctly
-          mv dist/*.deb "dist/streamtube_${version}_amd64.deb"
-          mv dist/*.rpm "dist/streamtube-${version}.x86_64.rpm"
+          mv dist/*.deb "dist/rusttube_${version}_amd64.deb"
+          mv dist/*.rpm "dist/rusttube-${version}.x86_64.rpm"
           ls -l dist
           deb=$(ls dist/*.deb); rpm=$(ls dist/*.rpm)
           dpkg-deb --info "$deb"
@@ -111,19 +112,19 @@ jobs:
           # plays video on any distribution without installing anything
           sudo apt-get install -y --no-install-recommends libmpv1 file desktop-file-utils appstream
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          out="dist/StreamTube-${version}-x86_64.AppImage"
+          out="dist/RustTube-${version}-x86_64.AppImage"
           wget -q -O linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy
 
           app=AppDir
-          install -Dm755 target/release/streamtube "$app/usr/bin/streamtube"
-          strip "$app/usr/bin/streamtube"
+          install -Dm755 target/release/rusttube "$app/usr/bin/rusttube"
+          strip "$app/usr/bin/rusttube"
           # inside the AppImage the desktop entry and metadata are named after the app id
           cid=io.github.avaneesh_inamdar.StreamTube
           install -Dm644 packaging/linux/streamtube.desktop "$app/usr/share/applications/$cid.desktop"
-          install -Dm644 assets/logo.png "$app/usr/share/icons/hicolor/256x256/apps/streamtube.png"
-          install -Dm644 assets/logo.svg "$app/usr/share/icons/hicolor/scalable/apps/streamtube.svg"
-          install -Dm644 LICENSE "$app/usr/share/doc/streamtube/LICENSE"
+          install -Dm644 assets/logo.png "$app/usr/share/icons/hicolor/256x256/apps/rusttube.png"
+          install -Dm644 assets/logo.svg "$app/usr/share/icons/hicolor/scalable/apps/rusttube.svg"
+          install -Dm644 LICENSE "$app/usr/share/doc/rusttube/LICENSE"
           mkdir -p "$app/usr/share/metainfo"
           sed "s|>streamtube.desktop<|>$cid.desktop<|" "packaging/linux/$cid.metainfo.xml" > "$app/usr/share/metainfo/$cid.metainfo.xml"
           desktop-file-validate "$app/usr/share/applications/$cid.desktop" || true
@@ -147,8 +148,8 @@ jobs:
       - name: Check the .deb installs
         run: |
           sudo apt-get install -y "./${{ steps.native.outputs.deb }}"
-          test -x /usr/bin/streamtube
-          ls /usr/share/applications/streamtube.desktop
+          test -x /usr/bin/rusttube
+          ls /usr/share/applications/rusttube.desktop
 
       - uses: actions/upload-artifact@v4
         with:

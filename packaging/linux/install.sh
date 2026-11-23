@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs Stream Tube for the current user (no root needed).
+# Installs RustTube for the current user (no root needed).
 # Usage: ./install.sh            install
 #        ./install.sh --uninstall remove
 set -e
@@ -9,21 +9,21 @@ apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 icons="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
 
 if [ "$1" = "--uninstall" ]; then
-    rm -f "$bin/streamtube" "$apps/streamtube.desktop" "$icons/streamtube.png"
-    echo "Stream Tube removed. Your data is still in ~/.local/share/StreamTube"
+    rm -f "$bin/rusttube" "$apps/rusttube.desktop" "$icons/rusttube.png"
+    echo "RustTube removed. Your data is still in ~/.local/share/RustTube"
     exit 0
 fi
 
 mkdir -p "$bin" "$apps" "$icons"
-install -m 755 "$here/streamtube" "$bin/streamtube"
-install -m 644 "$here/streamtube.png" "$icons/streamtube.png"
-sed "s|^Exec=streamtube|Exec=$bin/streamtube|" "$here/streamtube.desktop" > "$apps/streamtube.desktop"
+install -m 755 "$here/rusttube" "$bin/rusttube"
+install -m 644 "$here/rusttube.png" "$icons/rusttube.png"
+sed "s|^Exec=rusttube|Exec=$bin/rusttube|" "$here/rusttube.desktop" > "$apps/rusttube.desktop"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$apps" >/dev/null 2>&1 || true
 
-echo "Stream Tube installed to $bin/streamtube"
+echo "RustTube installed to $bin/rusttube"
 if ! ldconfig -p 2>/dev/null | grep -q "libmpv\.so"; then
     echo
-    echo "Stream Tube plays video through libmpv, which isn't installed yet:"
+    echo "RustTube plays video through libmpv, which isn't installed yet:"
     echo "  Debian/Ubuntu:  sudo apt install libmpv2   (Ubuntu 22.04: libmpv1)"
     echo "  Fedora:         sudo dnf install mpv-libs"
     echo "  Arch:           sudo pacman -S mpv"

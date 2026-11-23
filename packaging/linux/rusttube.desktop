@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=RustTube
+GenericName=YouTube client
+Comment=Watch YouTube without ads, sponsor reads or a browser
+Exec=rusttube %u
+Icon=rusttube
+Terminal=false
+Categories=AudioVideo;Video;Player;Network;
+Keywords=youtube;video;player;
+StartupWMClass=rusttube
