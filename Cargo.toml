@@ -1,6 +1,6 @@
 [package]
 name = "rusttube"
-version = "0.5.1-alpha"
+version = "0.7.2-alpha"
 edition = "2024"
 description = "A YouTube desktop client in Rust + GPUI with SponsorBlock, DeArrow, RYD, local subscriptions & macOS/Windows/Linux support"
 license = "MIT"
@@ -39,3 +39,8 @@ opt-level = 1
 
 [build-dependencies]
 embed-resource = "3"
+
+# GPUI's Windows text backend with one fix: right-to-left text (Arabic, Hebrew)
+# was drawn mirrored. See vendor/gpui-pre-windows/PATCHES.md.
+[patch.crates-io]
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }

@@ -55,6 +55,7 @@ pub fn save_window_bounds(window: &Window) {
 }
 
 fn main() {
+    perf::mark("main");
     // the local stream proxy must never be reached through the user's proxy
     // SAFETY: set before any other thread starts
     unsafe {
@@ -63,22 +64,29 @@ fn main() {
     }
     perf::init();
     store::init();
+    perf::mark("store");
     display::choose();
+    perf::mark("display");
     // one running app: a second launch (e.g. a clicked streamtube: link) hands over and exits
     let arg = std::env::args().nth(1).unwrap_or_default();
     if !display::relaunched() && links::forward_to_running(&arg) {
         return;
     }
     let incoming = links::listen();
+    perf::mark("links");
     gpui_kit::application()
         .with_assets(assets::Assets)
         .with_http_client(ui::UreqHttp::new())
         .run(|cx: &mut App| {
+            perf::mark("gpui running");
             gpui_kit::init(cx);
+            perf::mark("gpui_kit init");
             player::preview::init(cx);
+            perf::mark("preview init");
             cx.set_global(ui::Pal::new(true, store::settings_snapshot().accent));
             ui::apply_theme(None, cx);
             player::controller::init(cx);
+            perf::mark("player init");
             let opts = WindowOptions {
                 window_bounds: Some(saved_window_bounds(cx)),
                 titlebar: Some(TitlebarOptions { title: Some("RustTube".into()), appears_transparent: true, ..Default::default() }),
@@ -90,7 +98,10 @@ fn main() {
                 cx.new(|cx| ui::app::AppView::new(window, cx))
             })
             .expect("failed to open window");
+            perf::mark("window open");
             ui::app_icon::apply(cx);
+            links::register_scheme();
+            perf::mark("icon");
             if let Some(mut rx) = incoming {
                 cx.spawn(async move |cx| {
                     use futures::StreamExt;

@@ -7,8 +7,8 @@ use anyhow::{Context as _, Result, anyhow};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const REPO: &str = "Avaneesh-Inamdar/Stream-Tube-Desktop";
-pub const RELEASES_PAGE: &str = "https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/releases";
+const REPO: &str = "amitskr/RustTube";
+pub const RELEASES_PAGE: &str = "https://github.com/amitskr/RustTube/releases";
 
 #[derive(Clone, Debug)]
 pub struct Release {
@@ -236,7 +236,7 @@ pub fn install(cx: &mut App) {
     let r2 = result.clone();
     std::thread::spawn(move || {
         let res = (|| -> Result<std::path::PathBuf> {
-            let dir = std::env::temp_dir().join("streamtube-update");
+            let dir = std::env::temp_dir().join("rusttube-update");
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir)?;
             let path = dir.join(&name);
@@ -286,14 +286,36 @@ pub fn install(cx: &mut App) {
 }
 
 fn run_installer(path: &std::path::Path, cx: &mut App) {
-    let mut c = std::process::Command::new(path);
-    c.args(["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"]);
-    match c.spawn() {
-        Ok(_) => {
-            store::kv_set("update_skip", "");
-            cx.quit();
+    #[cfg(windows)]
+    {
+        let mut c = std::process::Command::new(path);
+        c.args(["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"]);
+        match c.spawn() {
+            Ok(_) => {
+                store::kv_set("update_skip", "");
+                cx.quit();
+            }
+            Err(e) => toast(cx, format!("Could not start the installer: {e}")),
         }
-        Err(e) => toast(cx, format!("Could not start the installer: {e}")),
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut c = std::process::Command::new("open");
+        c.arg(path);
+        match c.spawn() {
+            Ok(_) => {
+                store::kv_set("update_skip", "");
+                toast(cx, "Update downloaded. Opening installer disk image...");
+            }
+            Err(e) => toast(cx, format!("Could not open update image: {e}")),
+        }
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(path.parent().unwrap_or(path));
+        let _ = c.spawn();
+        toast(cx, "Update downloaded to downloads folder");
     }
 }
 

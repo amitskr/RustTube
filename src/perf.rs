@@ -45,3 +45,12 @@ pub fn init() {
         });
     }
 }
+
+/// Startup timeline (with STREAMTUBE_PERF set): milliseconds since launch at each step.
+pub fn mark(what: &str) {
+    static T0: OnceLock<Instant> = OnceLock::new();
+    let t0 = *T0.get_or_init(Instant::now);
+    if std::env::var_os("STREAMTUBE_PERF").is_some() {
+        eprintln!("[startup] {:>6.1} ms  {what}", t0.elapsed().as_secs_f64() * 1000.0);
+    }
+}

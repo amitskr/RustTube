@@ -60,10 +60,13 @@ fn resolve(video_id: &str) -> Result<StreamInfo> {
     match mode.as_str() {
         "ytdlp" => ytdlp_streams(video_id),
         // a chosen client first, the other built-in one if it fails
-        "visionos" | "innertube" => visionos(video_id).or_else(|e| android_vr(video_id).map_err(|e2| anyhow!("{e}\n{e2}"))),
+        "visionos" | "innertube" => visionos(video_id)
+            .or_else(|e| ios(video_id).map_err(|e2| anyhow!("{e}\n{e2}")))
+            .or_else(|e| android_vr(video_id).map_err(|e2| anyhow!("{e}\n{e2}"))),
         "android_vr" => android_vr(video_id)
             .and_then(|i| if i.video.is_empty() && i.hls_url.is_none() { Err(anyhow!("Android VR returned no playable formats")) } else { Ok(i) })
-            .or_else(|e| visionos(video_id).map_err(|e2| anyhow!("{e}\n{e2}"))),
+            .or_else(|e| visionos(video_id).map_err(|e2| anyhow!("{e}\n{e2}")))
+            .or_else(|e| ios(video_id).map_err(|e2| anyhow!("{e}\n{e2}"))),
         _ => {
             // The visionOS client hands out an HLS manifest that needs neither a
             // PO token nor JS challenge solving: fast, and works signed out.
@@ -78,6 +81,12 @@ fn resolve(video_id: &str) -> Result<StreamInfo> {
             let vision_err = match vision {
                 Ok(info) => return Ok(info),
                 Err(e) => e,
+            };
+            // videos made for kids (YouTube Kids) are refused to visionOS and
+            // Android VR, but the iOS client serves the same kind of HLS manifest
+            let vision_err = match ios(video_id) {
+                Ok(info) => return Ok(info),
+                Err(e) => anyhow!("{vision_err}\n{e}"),
             };
             let id = video_id.to_string();
             let vr = std::thread::spawn(move || android_vr(&id));
@@ -166,41 +175,131 @@ pub fn visitor_data() -> Option<String> {
 const VISION_VERSION: &str = "1.02";
 const VISION_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 
+const IOS_VERSION: &str = "20.10.4";
+const IOS_UA: &str = "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)";
+
+/// An Apple Innertube client whose player response carries a usable HLS manifest.
+struct HlsClient {
+    label: &'static str,
+    source: &'static str,
+    id: &'static str,
+    version: &'static str,
+    ua: &'static str,
+    client: Value,
+    /// iOS leaves the HLS manifest out of responses tied to the app's visitor id
+    visitor: bool,
+}
+
 /// visionOS client: metadata, captions and storyboard from the player
 /// response, playback from its HLS manifest (variants up to 4K with separate
 /// audio renditions).
 fn visionos(video_id: &str) -> Result<StreamInfo> {
-    let s = crate::store::settings_snapshot();
-    let vd = visitor_data().unwrap_or_default();
-    let body = json!({
-        "videoId": video_id,
-        "contentCheckOk": true,
-        "racyCheckOk": true,
-        "context": { "client": {
+    hls_client(video_id, HlsClient {
+        label: "visionOS",
+        source: "visionos",
+        id: "101",
+        version: VISION_VERSION,
+        ua: VISION_UA,
+        client: json!({
             "clientName": "VISIONOS", "clientVersion": VISION_VERSION,
             "deviceMake": "Apple", "deviceModel": "RealityDevice17,1",
-            "osName": "visionOS", "osVersion": "26.5.23O471", "userAgent": VISION_UA,
-            "hl": s.language, "gl": s.region, "visitorData": vd
-        }}
-    });
-    let r = http::post_json(
-        "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
-        &body,
-        &[
-            ("User-Agent", VISION_UA),
-            ("X-YouTube-Client-Name", "101"),
-            ("X-YouTube-Client-Version", VISION_VERSION),
-            ("X-Goog-Visitor-Id", &vd),
+            "osName": "visionOS", "osVersion": "26.5.23O471",
+        }),
+        visitor: true,
+    })
+}
+
+/// iOS client: the same HLS playback as visionOS, and it also plays videos
+/// made for kids, which visionOS and Android VR refuse.
+/// The iOS client's HLS master playlist for a video (used to download videos
+/// made for kids, which yt-dlp gets no formats for).
+pub fn ios_hls_manifest(video_id: &str) -> Result<String> {
+    ios(video_id)?.hls_url.ok_or_else(|| anyhow!("iOS: no HLS manifest"))
+}
+
+fn ios(video_id: &str) -> Result<StreamInfo> {
+    hls_client(video_id, HlsClient {
+        label: "iOS",
+        source: "ios",
+        id: "5",
+        version: IOS_VERSION,
+        ua: IOS_UA,
+        client: json!({
+            "clientName": "IOS", "clientVersion": IOS_VERSION,
+            "deviceMake": "Apple", "deviceModel": "iPhone16,2",
+            "osName": "iPhone", "osVersion": "18.3.2.22D82",
+        }),
+        visitor: false,
+    })
+}
+
+/// The visitor id that last got the iOS client an HLS manifest. YouTube puts
+/// some visitors in a SABR-only experiment that leaves the manifest out, so a
+/// visitor that works is kept.
+static IOS_VISITOR: parking_lot::Mutex<String> = parking_lot::Mutex::new(String::new());
+
+fn hls_client(video_id: &str, c: HlsClient) -> Result<StreamInfo> {
+    let s = crate::store::settings_snapshot();
+    let label = c.label;
+    let call = |vd: &str| -> Result<Value> {
+        let mut client = c.client.clone();
+        client["userAgent"] = json!(c.ua);
+        client["hl"] = json!(s.language);
+        client["gl"] = json!(s.region);
+        if !vd.is_empty() {
+            client["visitorData"] = json!(vd);
+        }
+        let body = json!({
+            "videoId": video_id,
+            "contentCheckOk": true,
+            "racyCheckOk": true,
+            "context": { "client": client }
+        });
+        let mut headers = vec![
+            ("User-Agent", c.ua),
+            ("X-YouTube-Client-Name", c.id),
+            ("X-YouTube-Client-Version", c.version),
             ("Origin", "https://www.youtube.com"),
-        ],
-    )?;
-    let status = r.pointer("/playabilityStatus/status").and_then(Value::as_str).unwrap_or("");
-    if status != "OK" {
-        let reason = r.pointer("/playabilityStatus/reason").and_then(Value::as_str).unwrap_or(status);
-        return Err(anyhow!("visionOS: {reason}"));
-    }
+        ];
+        if !vd.is_empty() {
+            headers.push(("X-Goog-Visitor-Id", vd));
+        }
+        let r = http::post_json("https://www.youtube.com/youtubei/v1/player?prettyPrint=false", &body, &headers)?;
+        let status = r.pointer("/playabilityStatus/status").and_then(Value::as_str).unwrap_or("");
+        if status != "OK" {
+            let reason = r.pointer("/playabilityStatus/reason").and_then(Value::as_str).unwrap_or(status);
+            return Err(anyhow!("{label}: {reason}"));
+        }
+        Ok(r)
+    };
+    let has_hls = |r: &Value| r.pointer("/streamingData/hlsManifestUrl").is_some();
+    let r = if c.visitor {
+        call(&visitor_data().unwrap_or_default())?
+    } else {
+        // the kept visitor first, then fresh ones (each new request is a new visitor)
+        let mut last = None;
+        for attempt in 0..5 {
+            let kept = IOS_VISITOR.lock().clone();
+            let vd = if attempt % 2 == 0 { kept.clone() } else { String::new() };
+            let r = call(&vd)?;
+            if has_hls(&r) {
+                if vd.is_empty() {
+                    if let Some(v) = r.pointer("/responseContext/visitorData").and_then(Value::as_str) {
+                        *IOS_VISITOR.lock() = v.to_string();
+                    }
+                }
+                last = Some(r);
+                break;
+            }
+            if !kept.is_empty() && vd == kept && attempt >= 2 {
+                IOS_VISITOR.lock().clear();
+            }
+            last = Some(r);
+        }
+        last.ok_or_else(|| anyhow!("{label}: no response"))?
+    };
     let mut info = parse_player(&r);
-    let hls = info.hls_url.clone().ok_or_else(|| anyhow!("visionOS: no HLS manifest"))?;
+    let hls = info.hls_url.clone().ok_or_else(|| anyhow!("{label}: no HLS manifest"))?;
     // adaptive URLs from this client need a PO token; only the HLS path is usable
     info.audio.clear();
     info.muxed.clear();
@@ -209,7 +308,7 @@ fn visionos(video_id: &str) -> Result<StreamInfo> {
     // audio renditions (dubbed tracks): only names, the proxy picks the playlist
     info.audio = audio;
     info.hls_only = true;
-    info.source = "visionos";
+    info.source = c.source;
     Ok(info)
 }
 
@@ -534,7 +633,18 @@ pub fn ytdlp_streams(video_id: &str) -> Result<StreamInfo> {
     }
     cmd.arg(format!("https://www.youtube.com/watch?v={video_id}"));
     hide_window(&mut cmd);
-    let out = cmd.output()?;
+    let mut out = cmd.output()?;
+    if !out.status.success() && crate::downloads::retry_with_ios(&String::from_utf8_lossy(&out.stderr)) {
+        // videos made for kids: yt-dlp's default clients refuse them, its iOS client doesn't
+        let mut retry = Command::new(ytdlp_path().unwrap_or_default());
+        retry.args(cmd.get_args()).arg("--extractor-args").arg(crate::downloads::YTDLP_IOS);
+        hide_window(&mut retry);
+        if let Ok(o) = retry.output() {
+            if o.status.success() {
+                out = o;
+            }
+        }
+    }
     if !out.status.success() {
         return Err(anyhow!("{}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("yt-dlp failed")));
     }
@@ -707,7 +817,8 @@ mod tests {
         println!("{} via {} v={} a={} subs={} sb={:?}", s.title, s.source, s.video.len(), s.audio.len(), s.captions.len(), s.storyboard);
         let (v, a) = pick_formats(&s, 1080, "vp9", None);
         println!("{:?} {:?}", v.map(|v| (&v.quality_label, &v.codecs)), a.map(|a| &a.codecs));
-        assert!(v.is_some() && a.is_some());
+        // HLS sources carry their audio in the manifest
+        assert!(v.is_some() && (a.is_some() || s.hls_only));
     }
 }
 
@@ -784,3 +895,25 @@ mod ua_tests {
     }
 }
 
+
+#[cfg(test)]
+mod kids_tests {
+    /// A video made for kids (YouTube Kids) resolves and its HLS segments download.
+    #[test]
+    #[ignore]
+    fn live_made_for_kids() {
+        let info = super::resolve("e_04ZrNroTo").unwrap();
+        println!("source={} variants={} hls={}", info.source, info.video.len(), info.hls_url.is_some());
+        assert!(info.hls_only && !info.video.is_empty());
+        let best = info.video.iter().max_by_key(|f| f.height).unwrap();
+        assert!(best.height >= 720, "{}", best.height);
+        let pl = super::http::get_text(&best.url).unwrap();
+        let seg = pl.lines().find(|l| !l.is_empty() && !l.starts_with('#')).unwrap();
+        let bytes = super::http::get_bytes(seg, &[]).unwrap();
+        println!("first segment {} bytes", bytes.len());
+        assert!(bytes.len() > 100_000);
+        // a regular video still goes through visionOS
+        let regular = super::resolve("dQw4w9WgXcQ").unwrap();
+        assert_eq!(regular.source, "visionos");
+    }
+}

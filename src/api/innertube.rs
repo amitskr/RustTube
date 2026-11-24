@@ -44,6 +44,9 @@ fn walk_items(v: &Value, page: &mut Page) {
     match v {
         Value::Object(m) => {
             for (k, c) in m {
+                if AD_RENDERERS.contains(&k.as_str()) {
+                    continue;
+                }
                 match k.as_str() {
                     "videoRenderer" | "compactVideoRenderer" | "gridVideoRenderer" | "playlistVideoRenderer"
                     | "playlistPanelVideoRenderer" | "videoWithContextRenderer" => {
@@ -113,6 +116,9 @@ pub fn continuation_token(c: &Value) -> Option<String> {
 
 /// TV client tiles (home / subscriptions feeds of a signed-in account).
 pub(crate) fn parse_tile(t: &Value) -> Option<VideoItem> {
+    if is_ad(t) {
+        return None;
+    }
     let ctype = t.get("contentType").and_then(Value::as_str).unwrap_or("");
     if !ctype.is_empty() && ctype != "TILE_CONTENT_TYPE_VIDEO" {
         return None;
@@ -149,8 +155,20 @@ pub(crate) fn parse_tile(t: &Value) -> Option<VideoItem> {
         find_all(t, "browseEndpoint", &mut eps);
         channel_id = eps.iter().filter_map(|b| b.get("browseId").and_then(Value::as_str)).find(|b| b.starts_with("UC")).map(str::to_string);
     }
-    let views = parts.iter().find(|p| p.to_lowercase().contains("view") || p.to_lowercase().contains("watching")).cloned();
-    let published = parts.iter().find(|p| p.to_lowercase().contains("ago") || p.to_lowercase().contains("streamed")).cloned();
+    // in any language: the date is the part that reads as a relative time, the
+    // views the other part that starts with a number, and the channel comes first
+    let published = parts
+        .iter()
+        .find(|p| p.to_lowercase().contains("ago") || p.to_lowercase().contains("streamed"))
+        .or_else(|| parts.iter().find(|p| crate::api::json::parse_relative_time(p).is_some()))
+        .cloned();
+    let views = parts
+        .iter()
+        .find(|p| p.to_lowercase().contains("view") || p.to_lowercase().contains("watching"))
+        .or_else(|| {
+            parts.iter().skip(1).find(|p| Some(*p) != published.as_ref() && p.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        })
+        .cloned();
     let channel_name = parts.iter().find(|p| Some(*p) != views.as_ref() && Some(*p) != published.as_ref()).cloned().unwrap_or_default();
     let duration_secs = badge.as_deref().and_then(parse_duration);
     Some(VideoItem {
@@ -169,6 +187,9 @@ pub(crate) fn parse_tile(t: &Value) -> Option<VideoItem> {
 }
 
 fn parse_video_renderer(r: &Value) -> Option<VideoItem> {
+    if is_ad(r) {
+        return None;
+    }
     let id = r.get("videoId")?.as_str()?.to_string();
     let title = opt_text(r.get("title")).or_else(|| opt_text(r.get("headline"))).unwrap_or_default();
     let owner = r
@@ -271,6 +292,9 @@ fn parse_shorts_lockup(r: &Value) -> Option<VideoItem> {
 }
 
 fn parse_lockup(l: &Value) -> Option<Item> {
+    if is_ad(l) {
+        return None;
+    }
     let id = l.get("contentId")?.as_str()?.to_string();
     let ctype = l.get("contentType").and_then(Value::as_str).unwrap_or("");
     let meta = l.pointer("/metadata/lockupMetadataViewModel")?;
@@ -352,11 +376,16 @@ fn parse_lockup(l: &Value) -> Option<Item> {
             let is_live = badge_texts.iter().any(|b| b.eq_ignore_ascii_case("live"));
             let is_upcoming = badge_texts.iter().any(|b| b.eq_ignore_ascii_case("upcoming"));
             let duration_text = badge_texts.iter().find(|b| parse_duration(b).is_some()).cloned();
-            let views = views.or_else(|| {
-                // compact form "1B" with PLAY_ARROW icon has no "views" word; pick a numeric-ish part
-                others.iter().find(|o| o.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)).cloned()
-            });
             let published = published.or_else(|| others.iter().find(|o| parse_relative_time(o).is_some()).cloned());
+            let views = views.or_else(|| {
+                // compact form "1B" with PLAY_ARROW icon, or another language: no "views" word;
+                // pick the numeric-ish part that isn't the date or the channel
+                others
+                    .iter()
+                    .filter(|o| Some(*o) != published.as_ref() && Some(*o) != channel_name.as_ref())
+                    .find(|o| o.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false))
+                    .cloned()
+            });
             let views = views.map(|v| {
                 if v.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',' || "KMB".contains(c)) {
                     format!("{v} views")
@@ -1247,6 +1276,35 @@ pub fn explore(channel_id: &str) -> Result<Page> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lockup(id: &str, title: &str) -> Value {
+        json!({ "lockupViewModel": {
+            "contentId": id, "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+            "metadata": { "lockupMetadataViewModel": { "title": { "content": title } } }
+        }})
+    }
+
+    #[test]
+    fn ads_are_skipped() {
+        let mut ad_lockup = lockup("adVid000001", "Buy now");
+        ad_lockup["lockupViewModel"]["rendererContext"] = json!({ "loggingContext": { "adClientParams": { "x": 1 } } });
+        let feed = json!({ "contents": [
+            { "richItemRenderer": { "content": lockup("realVid0001", "A real video") } },
+            // the home feed's in-feed ad slot
+            { "richItemRenderer": { "content": { "adSlotRenderer": { "fulfillmentContent": { "fulfilledLayout": {
+                "inFeedAdLayoutRenderer": { "renderingContent": lockup("adVid000002", "OLX") } } } } } } },
+            // an ad drawn as a plain lockup, recognisable only by its ad fields
+            { "richItemRenderer": { "content": ad_lockup } },
+            // search: promoted video and a regular one marked with an ad badge
+            { "searchPyvRenderer": { "ads": [{ "videoRenderer": { "videoId": "adVid000003", "title": { "simpleText": "Ad" } } }] } },
+            { "videoRenderer": { "videoId": "adVid000004", "title": { "simpleText": "Sponsored" },
+                "badges": [{ "metadataBadgeRenderer": { "style": "BADGE_STYLE_TYPE_AD", "label": "Ad" } }] } },
+            { "videoRenderer": { "videoId": "realVid0002", "title": { "simpleText": "Another real one" },
+                "badges": [{ "metadataBadgeRenderer": { "style": "BADGE_STYLE_TYPE_SIMPLE", "label": "New" } }] } },
+        ]});
+        let ids: Vec<String> = collect_items(&feed).items.iter().filter_map(|i| i.as_video().map(|v| v.id.clone())).collect();
+        assert_eq!(ids, vec!["realVid0001", "realVid0002"]);
+    }
 
     #[test]
     fn filter_encoding() {

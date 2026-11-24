@@ -42,6 +42,10 @@ pub struct PlayerView {
     /// left button held on the video; after a moment it plays at 2x
     press: Option<Instant>,
     press_boosted: bool,
+    /// the player's area, for placing annotations over the picture
+    area: Rc<Cell<Bounds<Pixels>>>,
+    /// the annotation under the pointer (shows a highlight's rollover text)
+    hover_annotation: Option<String>,
     _sub: Subscription,
 }
 
@@ -66,6 +70,8 @@ impl PlayerView {
             last_click: None,
             press: None,
             press_boosted: false,
+            area: Rc::new(Cell::new(Bounds::default())),
+            hover_annotation: None,
             _sub: sub,
         }
     }
@@ -205,6 +211,11 @@ impl Render for PlayerView {
                     this.press = None;
                     this.player.update(cx, |p, _| p.end_boost());
                 }
+                // a seek or volume drag whose release we missed (something under
+                // the pointer kept it) ends here, where the button was last held
+                if (this.drag_seek.is_some() || this.drag_vol) && ev.pressed_button != Some(MouseButton::Left) {
+                    this.finish_drag(cx);
+                }
                 if let Some(_) = this.drag_seek {
                     let f = Self::frac_in(this.seek_bounds.get(), ev.position.x);
                     this.drag_seek = Some(f);
@@ -240,29 +251,11 @@ impl Render for PlayerView {
             )
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                    if let Some(f) = this.drag_seek.take() {
-                        this.player.update(cx, |p, _| {
-                            let d = p.duration;
-                            p.seek_to(f as f64 * d)
-                        });
-                    }
-                    this.drag_vol = false;
-                    cx.notify();
-                }),
+                cx.listener(|this, _: &MouseUpEvent, _, cx| this.finish_drag(cx)),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                    if let Some(f) = this.drag_seek.take() {
-                        this.player.update(cx, |p, _| {
-                            let d = p.duration;
-                            p.seek_to(f as f64 * d)
-                        });
-                    }
-                    this.drag_vol = false;
-                    cx.notify();
-                }),
+                cx.listener(|this, _: &MouseUpEvent, _, cx| this.finish_drag(cx)),
             )
             .child(surface);
 
@@ -356,6 +349,12 @@ impl Render for PlayerView {
                     this.poke(cx);
                 })),
         );
+
+        if !mini && !audio_only {
+            if let Some(layer) = self.render_annotations(time, vsize, cx) {
+                root = root.child(layer);
+            }
+        }
 
         if self.player.read(cx).boost.is_some() {
             root = root.child(
@@ -508,6 +507,121 @@ impl Render for PlayerView {
 }
 
 /// Items of the menu shown on right-clicking the video.
+impl PlayerView {
+    /// Archived annotations over the video picture (letterboxing left out).
+    fn render_annotations(&mut self, time: f64, vsize: (f64, f64), cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::api::annotations::{Action, Kind};
+        if !store::settings_snapshot().annotations {
+            return None;
+        }
+        let list = self.player.read(cx).annotations.clone();
+        if list.is_empty() {
+            return None;
+        }
+        let area = self.area.get();
+        let (aw, ah) = (f32::from(area.size.width), f32::from(area.size.height));
+        // the picture inside the player, as mpv draws it (fit, centered)
+        let (vw, vh) = if vsize.0 > 0.0 && vsize.1 > 0.0 { (vsize.0 as f32, vsize.1 as f32) } else { (16.0, 9.0) };
+        let k = (aw / vw).min(ah / vh);
+        let (pw, ph) = (vw * k, vh * k);
+        let (ox, oy) = ((aw - pw) / 2.0, (ah - ph) / 2.0);
+        let hovered = self.hover_annotation.clone();
+        let rgba = |c: u32, a: f32| {
+            let mut c = rgb(c);
+            c.a = a.clamp(0.0, 1.0);
+            c
+        };
+        let mut layer = div().absolute().inset_0().overflow_hidden();
+        // measures the player so the next frame can place everything
+        let cell = self.area.clone();
+        layer = layer.child(canvas(move |b, _, _| cell.set(b), |_, _, _, _| {}).absolute().size_full());
+        if pw <= 0.0 || ph <= 0.0 {
+            return Some(layer.into_any_element());
+        }
+        for (i, a) in list.iter().enumerate() {
+            let shown = a.visible_at(time) || a.rollover_of.as_ref().is_some_and(|p| hovered.as_deref() == Some(p.as_str()));
+            if !shown {
+                continue;
+            }
+            let x = ox + a.x / 100.0 * pw;
+            let y = oy + a.y / 100.0 * ph;
+            let w = (a.w / 100.0 * pw).max(1.0);
+            let h = (a.h / 100.0 * ph).max(1.0);
+            let font = (a.text_size / 100.0 * ph).max(8.0);
+            let is_hovered = hovered.as_deref() == Some(a.id.as_str());
+            let mut el = div()
+                .id(("annotation", i))
+                .absolute()
+                .left(px(x))
+                .top(px(y))
+                .w(px(w))
+                .h(px(h))
+                .overflow_hidden()
+                .px(px(pw * 0.008))
+                .py(px(ph * 0.008))
+                .text_size(px(font))
+                .line_height(px(font * 1.2))
+                .text_color(rgb(a.fg));
+            el = match a.kind {
+                Kind::Highlight => {
+                    // an outline that lights up under the pointer
+                    let c = if is_hovered { rgba(a.bg, 0.9) } else { rgba(0x85_7F85, a.bg_alpha.max(0.25)) };
+                    el.border(px(2.5)).border_color(c)
+                }
+                Kind::Note if a.rollover_of.is_some() => el,
+                Kind::Note => {
+                    let alpha = if is_hovered && a.action.is_some() { 0.9 } else { a.bg_alpha };
+                    el.bg(rgba(a.bg, alpha)).when(a.style == "speech" || a.style == "popup", |d| d.rounded(px(ph * 0.008)))
+                }
+            };
+            if !a.text.is_empty() {
+                el = el.child(a.text.clone());
+            }
+            // rollover text never takes the pointer away from its highlight
+            if a.rollover_of.is_none() {
+                let id = a.id.clone();
+                el = el.on_hover(cx.listener(move |this, h: &bool, _, cx| {
+                    if *h {
+                        this.hover_annotation = Some(id.clone());
+                    } else if this.hover_annotation.as_deref() == Some(id.as_str()) {
+                        this.hover_annotation = None;
+                    }
+                    cx.notify();
+                }));
+            }
+            if let Some(action) = a.action.clone().filter(|_| a.rollover_of.is_none()) {
+                el = el
+                    .cursor_pointer()
+                    // keep the press from pausing or starting 2x playback underneath
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        match &action {
+                            Action::Seek(t) => {
+                                let t = *t;
+                                this.player.update(cx, |p, _| p.seek_to(t));
+                            }
+                            Action::YouTube(url) => {
+                                if let Some(route) = crate::ui::app::route_from_link(url) {
+                                    crate::ui::app::navigate(route, window, cx);
+                                } else {
+                                    let _ = open::that_detached(url);
+                                }
+                            }
+                            Action::Web(url) => {
+                                this.player.update(cx, |p, _| p.set_paused(true));
+                                let _ = open::that_detached(url);
+                            }
+                        }
+                        this.poke(cx);
+                    }));
+            }
+            layer = layer.child(el);
+        }
+        Some(layer.into_any_element())
+    }
+}
+
 fn context_items(player: &Entity<Player>, cx: &App) -> Vec<crate::ui::app::MenuItem> {
     use crate::ui::app::MenuItem;
     let pl = player.read(cx);
@@ -920,15 +1034,26 @@ impl PlayerView {
             .when_some(chapter_title.filter(|_| !narrow && !store::settings_snapshot().hide_chapters), |d, c| {
                 d.child(
                     div()
+                        .id("c-chapter")
                         .flex()
                         .items_center()
                         .gap_1()
                         .ml_3()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(hsla(0., 0., 1., 0.15)))
                         .text_sm()
                         .text_color(white())
                         .child("•")
                         .child(div().max_w(px(260.)).truncate().child(c))
-                        .child(icon("chevron-right").size_4().text_color(white())),
+                        .child(icon("chevron-right").size_4().text_color(white()))
+                        // opens the chapter list beside the player
+                        .on_click(|_, _, cx| {
+                            cx.stop_propagation();
+                            crate::ui::pages::watch::toggle_chapters(cx);
+                        }),
                 )
             });
 
@@ -1037,7 +1162,12 @@ impl PlayerView {
                 div()
                     .id("seek-wrap")
                     .py_2()
-                    .on_click(|_, _, cx| cx.stop_propagation())
+                    // the click is the bar's release; it's kept from the pause layer,
+                    // so the seek it ends is finished here
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.finish_drag(cx);
+                    }))
                     .child(bar),
             )
             .child(
@@ -1055,6 +1185,18 @@ impl PlayerView {
                     .child(left)
                     .child(right),
             )
+    }
+
+    /// Ends a seek-bar or volume drag: seeks to where the bar was let go.
+    fn finish_drag(&mut self, cx: &mut Context<Self>) {
+        if let Some(f) = self.drag_seek.take() {
+            self.player.update(cx, |p, _| {
+                let d = p.duration;
+                p.seek_to(f as f64 * d)
+            });
+        }
+        self.drag_vol = false;
+        cx.notify();
     }
 
     /// The "Stats for nerds" panel; refreshes itself every second while open.
@@ -1228,6 +1370,15 @@ impl PlayerView {
                             cx.refresh_windows();
                         }))
                     })
+                    .when(!pl.annotations.is_empty(), |d| {
+                        let on = store::settings_snapshot().annotations;
+                        d.child(row("m-ann".into(), Some("message-square"), "Annotations".into(), Some(if on { "On".into() } else { "Off".into() }), false).on_click(
+                            cx.listener(move |_, _, _, cx| {
+                                store::update_settings(|s| s.annotations = !on);
+                                cx.notify();
+                            }),
+                        ))
+                    })
                     .child(
                         row("m-l".into(), Some("repeat"), "Loop".into(), Some(if looping { "On".into() } else { "Off".into() }), false)
                             .on_click(cx.listener(move |t, _, _, cx| t.player.update(cx, |p, cx| { p.set_loop(!looping); cx.notify() }))),
@@ -1269,7 +1420,7 @@ impl PlayerView {
                         row(SharedString::from(format!("q-{q}")), None, format!("{q}p{}", if q >= 2160 { " 4K" } else if q >= 720 { " HD" } else { "" }), None, q == cur)
                             .on_click(cx.listener(move |t, _, _, cx| {
                                 t.menu = None;
-                                store::update_settings(|s| s.default_quality = q);
+                                // set_quality keeps it as the default only when "Remember last quality" is on
                                 t.player.update(cx, |p, cx| p.set_quality(q, cx));
                             })),
                     );

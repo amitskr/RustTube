@@ -70,18 +70,78 @@ pub fn route_from_link(arg: &str) -> Option<Route> {
         .flatten()
         .map(|q| crate::api::http::urldecode(&q.replace('+', " ")))
         .filter(|q| !q.trim().is_empty());
+    let param = |key: &str| {
+        arg.split(['?', '&', '#']).skip(1).find_map(|kv| kv.strip_prefix(key).and_then(|v| v.strip_prefix('='))).map(str::to_string)
+    };
     search_arg.map(Route::Search).or_else(|| {
         innertube::parse_youtube_url(&arg).map(|r| match r {
-            innertube::ResolvedUrl::Video(id) => Route::Watch { id, playlist: None, start: None },
+            // a shared position (t=90, t=1m30s) and the playlist it's played from
+            innertube::ResolvedUrl::Video(id) => Route::Watch {
+                id,
+                playlist: param("list").filter(|l| !l.is_empty()),
+                start: param("t").or_else(|| param("start")).and_then(|t| parse_link_time(&t)).filter(|t| *t > 0.0),
+            },
             innertube::ResolvedUrl::Channel(id) => Route::Channel(id),
             innertube::ResolvedUrl::Playlist(id) => Route::Playlist(id),
         })
     })
 }
 
+/// "90", "90s", "1m30s" or "1h2m3s" in seconds.
+fn parse_link_time(t: &str) -> Option<f64> {
+    if let Ok(s) = t.trim_end_matches('s').parse::<f64>() {
+        return Some(s);
+    }
+    let (mut total, mut num) = (0.0, String::new());
+    for c in t.chars() {
+        if c.is_ascii_digit() || c == '.' {
+            num.push(c);
+        } else {
+            let n: f64 = num.parse().ok()?;
+            num.clear();
+            total += n * match c {
+                'h' => 3600.0,
+                'm' => 60.0,
+                's' => 1.0,
+                _ => return None,
+            };
+        }
+    }
+    (num.is_empty()).then_some(total)
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::{Route, parse_link_time, route_from_link};
+
+    #[test]
+    fn links_keep_time_and_playlist() {
+        let r = route_from_link("streamtube://open?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ%26t%3D1m30s%26list%3DPL123");
+        assert!(matches!(r, Some(Route::Watch { ref id, playlist: Some(ref l), start: Some(s) }) if id == "dQw4w9WgXcQ" && l == "PL123" && s == 90.0), "{r:?}");
+        let r = route_from_link("https://youtu.be/dQw4w9WgXcQ?t=42");
+        assert!(matches!(r, Some(Route::Watch { start: Some(s), playlist: None, .. }) if s == 42.0), "{r:?}");
+        let r = route_from_link("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+        assert!(matches!(r, Some(Route::Watch { start: None, playlist: None, .. })), "{r:?}");
+        assert_eq!(parse_link_time("1h2m3s"), Some(3723.0));
+        assert_eq!(parse_link_time("abc"), None);
+    }
+}
+
 pub fn navigate(route: Route, window: &mut Window, cx: &mut App) {
+    // Ctrl+click (Cmd+click) on any card or link opens it in a new tab, like a browser
+    if window.modifiers().secondary(cx) {
+        open_in_new_tab(route, false, window, cx);
+        return;
+    }
     if let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) {
         app.update(cx, |a, cx| a.go(route, window, cx));
+    }
+}
+
+/// Opens a page in a new tab, in the background unless `switch` is set.
+pub fn open_in_new_tab(route: Route, switch: bool, window: &mut Window, cx: &mut App) {
+    if let Some(app) = cx.try_global::<AppHandle>().and_then(|h| h.0.upgrade()) {
+        app.update(cx, |a, cx| a.new_tab(route, switch, window, cx));
     }
 }
 
@@ -318,7 +378,28 @@ pub fn confirm(title: &str, body: &str, confirm: &str, window: &mut Window, cx: 
 
 // ───────────────────────── AppView ─────────────────────────
 
+/// A tab that isn't the one shown. The shown tab lives in AppView's own
+/// route/page/history fields; switching swaps them with one of these.
+#[derive(Clone)]
+struct Tab {
+    id: u64,
+    route: Route,
+    /// built the first time the tab is shown, so a video opened in the
+    /// background doesn't start playing on its own
+    page: Option<AnyView>,
+    history: Vec<(Route, AnyView)>,
+    forward: Vec<(Route, AnyView)>,
+}
+
+/// At most this many tabs; more would only hold pages nobody looks at.
+const MAX_TABS: usize = 12;
+
 pub struct AppView {
+    /// every tab in order; the entry at `active_tab` is a placeholder for the
+    /// tab shown through the fields below
+    tabs: Vec<Tab>,
+    active_tab: usize,
+    next_tab_id: u64,
     pub route: Route,
     /// space is down: released quickly it toggles pause, held it plays at 2x
     space_down: bool,
@@ -486,7 +567,9 @@ impl AppView {
             "history" => Route::History,
             _ => Route::Home,
         });
+        crate::perf::mark("app shell");
         let page = build_page(&start, window, cx);
+        crate::perf::mark("start page");
         crate::updater::check_on_startup(cx);
         if let Route::Search(q) = &start {
             let q = q.clone();
@@ -511,6 +594,9 @@ impl AppView {
             }
         }
         Self {
+            tabs: vec![Tab { id: 1, route: start.clone(), page: None, history: Vec::new(), forward: Vec::new() }],
+            active_tab: 0,
+            next_tab_id: 2,
             route: start,
             page,
             history: Vec::new(),
@@ -992,6 +1078,218 @@ impl AppView {
         cx.notify();
     }
 
+    // ───── tabs ─────
+
+    pub fn new_tab(&mut self, route: Route, switch: bool, window: &mut Window, cx: &mut Context<Self>) {
+        match &route {
+            Route::Channel(id) | Route::Playlist(id) | Route::Watch { id, .. } if id.is_empty() => return,
+            _ => {}
+        }
+        cx.set_global(OpenMenu(None));
+        if self.tabs.len() >= MAX_TABS {
+            toast(cx, format!("You can have up to {MAX_TABS} tabs open"));
+            return;
+        }
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+        // right after the current tab, like a browser
+        let at = self.active_tab + 1;
+        self.tabs.insert(at, Tab { id, route, page: None, history: Vec::new(), forward: Vec::new() });
+        if switch {
+            self.switch_tab(at, window, cx);
+        } else {
+            toast(cx, "Opened in a new tab");
+            cx.notify();
+        }
+    }
+
+    pub fn switch_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() || index == self.active_tab {
+            return;
+        }
+        cx.set_global(OpenMenu(None));
+        crate::player::preview::stop(cx);
+        crate::ui::image_cache::on_navigate(cx);
+        self.drawer_open = false;
+        // park the shown tab
+        let cur = &mut self.tabs[self.active_tab];
+        cur.route = self.route.clone();
+        cur.page = Some(self.page.clone());
+        cur.history = std::mem::take(&mut self.history);
+        cur.forward = std::mem::take(&mut self.forward);
+        // and show the other one
+        self.active_tab = index;
+        let next = self.tabs[index].clone();
+        self.route = next.route;
+        self.history = next.history;
+        self.forward = next.forward;
+        // a watch page for another video than the one playing is built again,
+        // which starts its video (the same as going back to it)
+        let playing = player(cx).read(cx).video.as_ref().map(|v| v.id.clone());
+        let stale = matches!(&self.route, Route::Watch { id, .. } if playing.as_deref() != Some(id.as_str()));
+        self.page = match next.page {
+            Some(p) if !stale => p,
+            _ => build_page(&self.route.clone(), window, cx),
+        };
+        if cx.global::<UiState>().fullscreen && !matches!(self.route, Route::Watch { .. }) {
+            toggle_fullscreen(window, cx);
+        }
+        window.set_window_title(&format!("{} - Stream Tube", self.route.title()));
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    pub fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.len() < 2 || index >= self.tabs.len() {
+            return;
+        }
+        if index == self.active_tab {
+            // show the neighbour first, then drop this one
+            let to = if index + 1 < self.tabs.len() { index + 1 } else { index - 1 };
+            self.switch_tab(to, window, cx);
+        }
+        self.tabs.remove(index);
+        if index < self.active_tab {
+            self.active_tab -= 1;
+        }
+        cx.notify();
+    }
+
+    fn cycle_tab(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let n = self.tabs.len() as isize;
+        if n > 1 {
+            let i = (self.active_tab as isize + step).rem_euclid(n) as usize;
+            self.switch_tab(i, window, cx);
+        }
+    }
+
+    /// A short name for a tab's page.
+    fn tab_label(route: &Route, cx: &App) -> String {
+        match route {
+            Route::Watch { id, .. } => {
+                let p = player(cx).read(cx);
+                p.video.as_ref().filter(|v| &v.id == id && !v.title.is_empty()).map(|v| v.title.clone()).unwrap_or_else(|| "Video".into())
+            }
+            Route::Channel(id) => store::subscriptions().into_iter().find(|s| &s.channel_id == id).map(|s| s.name).unwrap_or_else(|| "Channel".into()),
+            r => r.title(),
+        }
+    }
+
+    fn tab_icon(route: &Route) -> &'static str {
+        match route {
+            Route::Home | Route::Explore(_) => "house",
+            Route::Shorts(_) => "zap",
+            Route::Subscriptions | Route::Channels => "tv",
+            Route::History => "history",
+            Route::Library | Route::LocalPlaylist(_) | Route::Playlist(_) => "list-video",
+            Route::Search(_) => "search",
+            Route::Channel(_) => "circle-user",
+            Route::Watch { .. } => "play",
+            Route::Settings => "settings",
+            Route::Downloads => "download",
+        }
+    }
+
+    fn render_tabs(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.tabs.len() < 2 {
+            return None;
+        }
+        let p = pal(cx);
+        let mut strip = div()
+            .id("tabs")
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_1()
+            .h(px(38.))
+            .px_3()
+            .bg(p.bg)
+            .border_b_1()
+            .border_color(p.border)
+            .overflow_x_scroll();
+        for i in 0..self.tabs.len() {
+            let active = i == self.active_tab;
+            let route = if active { self.route.clone() } else { self.tabs[i].route.clone() };
+            let id = self.tabs[i].id;
+            let label = Self::tab_label(&route, cx);
+            strip = strip.child(
+                div()
+                    .id(("tab", id))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_2()
+                    .h(px(30.))
+                    .pl_3()
+                    .pr_1()
+                    .w(px(200.))
+                    .rounded_lg()
+                    .cursor_pointer()
+                    .when(active, |d| d.bg(p.surface2))
+                    .when(!active, |d| d.hover(|d| d.bg(p.hover)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some(i) = this.tabs.iter().position(|t| t.id == id) {
+                            this.switch_tab(i, window, cx);
+                        }
+                    }))
+                    // middle click closes, like a browser tab
+                    .on_mouse_down(
+                        MouseButton::Middle,
+                        cx.listener(move |this, _, window, cx| {
+                            if let Some(i) = this.tabs.iter().position(|t| t.id == id) {
+                                this.close_tab(i, window, cx);
+                            }
+                        }),
+                    )
+                    .child(icon(Self::tab_icon(&route)).size_4().text_color(if active { p.accent } else { p.text2 }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_sm()
+                            .text_color(if active { p.text } else { p.text2 })
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .id(("tab-close", id))
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .justify_center()
+                            .size(px(22.))
+                            .rounded_md()
+                            .hover(|d| d.bg(p.hover))
+                            .child(icon("x").size_3p5().text_color(p.text2))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                if let Some(i) = this.tabs.iter().position(|t| t.id == id) {
+                                    this.close_tab(i, window, cx);
+                                }
+                            })),
+                    ),
+            );
+        }
+        strip = strip.child(
+            div()
+                .id("tab-new")
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(30.))
+                .rounded_lg()
+                .cursor_pointer()
+                .hover(|d| d.bg(p.hover))
+                .child(icon("plus").size_4().text_color(p.text2))
+                .on_click(cx.listener(|this, _, window, cx| this.new_tab(Route::Home, true, window, cx))),
+        );
+        Some(strip.into_any_element())
+    }
+
     pub fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((r, p)) = self.history.pop() {
             let cur_r = std::mem::replace(&mut self.route, r);
@@ -1409,6 +1707,35 @@ impl AppView {
             self.refresh(window, cx);
             return;
         }
+        // tabs: Ctrl+T new, Ctrl+W close, Ctrl+Tab / Ctrl+Shift+Tab next / previous, Ctrl+1..9 pick
+        if m.control && !m.alt {
+            match k {
+                "t" if !m.shift => {
+                    self.new_tab(Route::Home, true, window, cx);
+                    return;
+                }
+                "w" if !m.shift && self.tabs.len() > 1 => {
+                    self.close_tab(self.active_tab, window, cx);
+                    return;
+                }
+                "tab" => {
+                    self.cycle_tab(if m.shift { -1 } else { 1 }, window, cx);
+                    return;
+                }
+                "pageup" | "pagedown" if self.tabs.len() > 1 => {
+                    self.cycle_tab(if k == "pageup" { -1 } else { 1 }, window, cx);
+                    return;
+                }
+                d if self.tabs.len() > 1 && matches!(d, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9") => {
+                    let n: usize = d.parse().unwrap_or(1);
+                    // Ctrl+9 is the last tab, as in browsers
+                    let i = if n == 9 { self.tabs.len() - 1 } else { (n - 1).min(self.tabs.len() - 1) };
+                    self.switch_tab(i, window, cx);
+                    return;
+                }
+                _ => {}
+            }
+        }
         if k == "escape" && self.dl_panel {
             self.dl_panel = false;
             cx.notify();
@@ -1489,6 +1816,16 @@ impl AppView {
         }
         // typing in a text field (chat, filters, channel search...) isn't a shortcut
         if window.focused(cx).map(|f| f != self.focus).unwrap_or(false) {
+            return;
+        }
+        // scrolling from the keyboard: PageUp/PageDown everywhere; the arrows,
+        // Home/End and Space too on pages without a big player (on the watch page
+        // they seek, change the volume and pause)
+        let watching = matches!(self.route, Route::Watch { .. } | Route::Shorts(_));
+        let scroll_key = matches!(k, "pageup" | "pagedown")
+            || (!watching && matches!(k, "up" | "down" | "home" | "end"))
+            || (!watching && k == "space" && player(cx).read(cx).video.is_none());
+        if scroll_key && crate::ui::widgets::scroll_page_key(k, m.shift, window) {
             return;
         }
         let p = player(cx);
@@ -2594,6 +2931,10 @@ impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::perf::add(&crate::perf::APP_RENDERS, 1);
         crate::display::mark_drawn();
+        {
+            static FIRST: std::sync::Once = std::sync::Once::new();
+            FIRST.call_once(|| crate::perf::mark("first frame"));
+        }
         if std::mem::take(&mut self.reload_page) {
             // account changed: feeds that depend on it are rebuilt (the watch page keeps playing)
             if matches!(self.route, Route::Home | Route::Subscriptions | Route::Channels) {
@@ -2688,7 +3029,7 @@ impl Render for AppView {
             } else {
                 Some(self.render_sidebar(cx))
             };
-            root = root.child(self.render_topbar(window, cx)).child(
+            root = root.child(self.render_topbar(window, cx)).children(self.render_tabs(cx)).child(
                 div()
                     .flex()
                     .flex_1()

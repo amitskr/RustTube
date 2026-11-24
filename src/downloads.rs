@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum JobStatus {
@@ -117,7 +117,7 @@ pub fn start(video: VideoItem, format: Option<String>, cx: &mut App) {
             "Higher quality downloads use yt-dlp",
             vec![
                 (
-                    "Get yt-dlp (18 MB)".into(),
+                    format!("Get yt-dlp ({YTDLP_SIZE})").into(),
                     Arc::new(move |_, cx: &mut App| {
                         PENDING.lock().push((video.clone(), Some(fmt.clone())));
                         fetch_ytdlp(cx);
@@ -141,7 +141,7 @@ pub fn start(video: VideoItem, format: Option<String>, cx: &mut App) {
             "Videos above 360p need FFmpeg to join video and audio",
             vec![
                 (
-                    "Get FFmpeg (91 MB)".into(),
+                    format!("Get FFmpeg ({FFMPEG_SIZE})").into(),
                     Arc::new(move |_, cx: &mut App| {
                         PENDING.lock().push((video.clone(), Some(fmt.clone())));
                         fetch_ffmpeg(cx);
@@ -262,22 +262,61 @@ fn run_job(job: &Job, cancel: &AtomicBool, progress: &dyn Fn(f32, &str)) -> anyh
             "best" => "bv*+ba/b".to_string(),
             h => format!("bv*[height<={h}]+ba/b[height<={h}]/b"),
         };
-        match ytdlp_run(&bin, &dir, &url, &fmt, &s, cancel, progress) {
+        let res = match ytdlp_run(&bin, &dir, &url, &fmt, &s, &[], None, cancel, progress) {
             Err(e) if e.to_string().contains("403") && !cancel.load(Ordering::SeqCst) => {
                 // a stream URL was refused: retry preferring the HLS formats, which don't need a PO token
                 progress(0.0, "Retrying…");
                 let hls = format!("{}/{}", fmt.replace("bv*", "bv*[protocol^=m3u8]"), fmt);
-                return ytdlp_run(&bin, &dir, &url, &hls, &s, cancel, progress);
+                ytdlp_run(&bin, &dir, &url, &hls, &s, &[], None, cancel, progress)
             }
-            other => return other,
-        }
+            other => other,
+        };
+        return match res {
+            Err(e) if retry_with_ios(&e.to_string()) && !cancel.load(Ordering::SeqCst) => {
+                // videos made for kids are refused to yt-dlp's default clients;
+                // the iOS client still serves them (its HLS formats need no PO token)
+                progress(0.0, "Retrying…");
+                match ytdlp_run(&bin, &dir, &url, &fmt, &s, &["--extractor-args", YTDLP_IOS], None, cancel, progress) {
+                    Err(e2) if e2.to_string() == "cancelled" => Err(e2),
+                    Err(_) if !cancel.load(Ordering::SeqCst) => {
+                        // yt-dlp found no formats either: download the HLS manifest the
+                        // app itself plays these videos from
+                        match streams::ios_hls_manifest(&job.video.id) {
+                            Ok(manifest) => {
+                                let fmt = if job.format == "single" { "bv*+ba/b".to_string() } else { fmt.clone() };
+                                let name = format!("{} [{}]", sanitize(&job.video.title).trim_end_matches('.').replace('%', "%%"), job.video.id);
+                                ytdlp_run(&bin, &dir, &manifest, &fmt, &s, &[], Some(&name), cancel, progress)
+                                    .map_err(|e3| if e3.to_string() == "cancelled" { e3 } else { e })
+                            }
+                            Err(_) => Err(e),
+                        }
+                    }
+                    other => other,
+                }
+            }
+            other => other,
+        };
     }
     native_download(job, &dir, cancel, progress)
 }
 
-fn ytdlp_run(bin: &str, dir: &std::path::Path, url: &str, fmt: &str, s: &store::Settings, cancel: &AtomicBool, progress: &dyn Fn(f32, &str)) -> anyhow::Result<String> {
+/// yt-dlp extractor arguments for the iOS client, including the formats yt-dlp
+/// would otherwise hold back for lack of a PO token.
+pub const YTDLP_IOS: &str = "youtube:player_client=ios;formats=missing_pot";
+
+/// Whether a failed yt-dlp run is worth retrying through the iOS client.
+pub fn retry_with_ios(err: &str) -> bool {
+    let e = err.to_lowercase();
+    !e.contains("cancelled") && (e.contains("not available") || e.contains("unavailable") || e.contains("requested format") || e.contains("reloaded"))
+}
+
+/// `name`: the file name without extension, when the URL isn't a YouTube page
+/// (yt-dlp would otherwise name the file after the manifest).
+#[allow(clippy::too_many_arguments)]
+fn ytdlp_run(bin: &str, dir: &std::path::Path, url: &str, fmt: &str, s: &store::Settings, extra: &[&str], name: Option<&str>, cancel: &AtomicBool, progress: &dyn Fn(f32, &str)) -> anyhow::Result<String> {
     {
         let mut cmd = Command::new(bin);
+        cmd.args(extra);
         if let Some(p) = crate::store::proxy_setting() {
             cmd.arg("--proxy").arg(p);
         }
@@ -293,7 +332,10 @@ fn ytdlp_run(bin: &str, dir: &std::path::Path, url: &str, fmt: &str, s: &store::
         cmd.args(["--newline", "--no-warnings", "--no-playlist", "--progress", "--progress-delta", "0.4"])
             .args(["--progress-template", "download:[dl] %(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s"])
             .args(["-N", "8", "--http-chunk-size", "10M", "-f", fmt, "-o"])
-            .arg(dir.join("%(title).150B [%(id)s].%(ext)s"))
+            .arg(match name {
+                Some(n) => dir.join(format!("{n}.%(ext)s")),
+                None => dir.join("%(title).150B [%(id)s].%(ext)s"),
+            })
             .args(["--print", "after_move:filepath"])
             .arg(url)
             .stdout(Stdio::piped())
@@ -664,12 +706,74 @@ pub fn load_history(cx: &mut App) {
 static FFMPEG_FETCHING: AtomicBool = AtomicBool::new(false);
 static PENDING: Mutex<Vec<(VideoItem, Option<String>)>> = Mutex::new(Vec::new());
 
-/// yt-dlp's FFmpeg builds: (repository, release, file)
-const FFMPEG_ASSET: (&str, &str, &str) = ("yt-dlp/FFmpeg-Builds", "tags/latest", "ffmpeg-master-latest-win64-gpl-shared.zip");
+/// yt-dlp's FFmpeg builds: (repository, release, file). The Linux one is static,
+/// so it runs on any distribution.
+const FFMPEG_ASSET: (&str, &str, &str) = (
+    "yt-dlp/FFmpeg-Builds",
+    "tags/latest",
+    if cfg!(windows) { "ffmpeg-master-latest-win64-gpl-shared.zip" } else { "ffmpeg-master-latest-linux64-gpl.tar.xz" },
+);
+
+/// Download sizes shown on the buttons that fetch the tools.
+pub const FFMPEG_SIZE: &str = if cfg!(windows) { "91 MB" } else { "158 MB" };
+pub const YTDLP_SIZE: &str = if cfg!(windows) { "24 MB" } else { "41 MB" };
 
 /// Downloads a file from a GitHub release into `dest`, and keeps it only if it
 /// matches the SHA-256 GitHub lists for it. `release` is "latest" or "tags/<tag>".
+/// How far the FFmpeg / yt-dlp download has got: idle, a percentage, or unpacking.
+static FFMPEG_PCT: AtomicU32 = AtomicU32::new(IDLE);
+static YTDLP_PCT: AtomicU32 = AtomicU32::new(IDLE);
+const IDLE: u32 = u32::MAX;
+const UNPACKING: u32 = 1000;
+/// bumped each time a tool download finishes, so pages showing whether it's
+/// installed look again without being reopened
+static TOOLS_GEN: AtomicU64 = AtomicU64::new(0);
+
+pub enum ToolFetch {
+    Downloading(u32),
+    Unpacking,
+}
+
+fn fetch_state(a: &AtomicU32) -> Option<ToolFetch> {
+    match a.load(Ordering::SeqCst) {
+        IDLE => None,
+        UNPACKING => Some(ToolFetch::Unpacking),
+        n => Some(ToolFetch::Downloading(n.min(100))),
+    }
+}
+
+pub fn ffmpeg_fetch() -> Option<ToolFetch> {
+    fetch_state(&FFMPEG_PCT)
+}
+
+pub fn ytdlp_fetch() -> Option<ToolFetch> {
+    fetch_state(&YTDLP_PCT)
+}
+
+pub fn tools_generation() -> u64 {
+    TOOLS_GEN.load(Ordering::SeqCst)
+}
+
+/// Repaints while a tool downloads, so its progress moves on screen.
+fn repaint_while(flag: &'static AtomicBool, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        while flag.load(Ordering::SeqCst) {
+            cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+            let _ = cx.update(|cx| cx.refresh_windows());
+        }
+    })
+    .detach();
+}
+
 fn download_github_asset((repo, release, name): (&str, &str, &str), dest: &std::path::Path) -> anyhow::Result<()> {
+    download_github_asset_progress((repo, release, name), dest, None)
+}
+
+fn download_github_asset_progress(
+    (repo, release, name): (&str, &str, &str),
+    dest: &std::path::Path,
+    pct: Option<&AtomicU32>,
+) -> anyhow::Result<()> {
     let rel = crate::api::http::get_json(&format!("https://api.github.com/repos/{repo}/releases/{release}"))?;
     let asset = rel
         .get("assets")
@@ -681,7 +785,13 @@ fn download_github_asset((repo, release, name): (&str, &str, &str), dest: &std::
     let (Some(url), Some(sha)) = (url, sha) else { anyhow::bail!("GitHub gave no checksum for {name}") };
     {
         let mut f = std::fs::File::create(dest)?;
-        crate::api::http::download_to(url, &mut f, |_, _| true)?;
+        let size = asset.get("size").and_then(|s| s.as_u64());
+        crate::api::http::download_to(url, &mut f, |done, total| {
+            if let (Some(p), Some(t)) = (pct, total.or(size).filter(|t| *t > 0)) {
+                p.store(((done * 100) / t).min(100) as u32, Ordering::SeqCst);
+            }
+            true
+        })?;
     }
     if crate::updater::file_sha256(dest)? != sha {
         let _ = std::fs::remove_file(dest);
@@ -717,45 +827,58 @@ pub fn ffmpeg_path() -> Option<String> {
 
 /// Downloads FFmpeg into the data folder, then starts the downloads waiting for it.
 pub fn fetch_ffmpeg(cx: &mut App) {
-    if !cfg!(windows) {
-        toast(cx, "Install FFmpeg with your package manager (e.g. sudo apt install ffmpeg)");
-        return;
-    }
     if FFMPEG_FETCHING.swap(true, Ordering::SeqCst) {
         return;
     }
+    FFMPEG_PCT.store(0, Ordering::SeqCst);
     toast(cx, "Downloading FFmpeg…");
+    repaint_while(&FFMPEG_FETCHING, cx);
     cx.spawn(async move |cx| {
         let res = crate::ui::blocking(|| -> anyhow::Result<()> {
             let dir = ffmpeg_dir();
             let tmp = store::data_dir().join("ffmpeg-download");
             let _ = std::fs::remove_dir_all(&tmp);
             std::fs::create_dir_all(&tmp)?;
-            let zip = tmp.join("ffmpeg.zip");
-            download_github_asset(FFMPEG_ASSET, &zip)?;
-            // Windows 10+ ships bsdtar, which reads zip files
+            let archive = tmp.join(FFMPEG_ASSET.2);
+            download_github_asset_progress(FFMPEG_ASSET, &archive, Some(&FFMPEG_PCT))?;
+            FFMPEG_PCT.store(UNPACKING, Ordering::SeqCst);
+            // Windows 10+ ships bsdtar, which reads zip files; GNU tar unpacks .tar.xz
             let mut c = Command::new("tar");
-            c.arg("-xf").arg(&zip).arg("-C").arg(&tmp);
+            c.arg(if cfg!(windows) { "-xf" } else { "-xJf" }).arg(&archive).arg("-C").arg(&tmp);
             hide_window(&mut c);
             if !c.status()?.success() {
                 anyhow::bail!("could not unpack FFmpeg");
             }
+            let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
             let bin = std::fs::read_dir(&tmp)?
                 .filter_map(Result::ok)
                 .map(|e| e.path().join("bin"))
-                .find(|p| p.join("ffmpeg.exe").is_file())
-                .ok_or_else(|| anyhow::anyhow!("ffmpeg.exe not found in the archive"))?;
+                .find(|p| p.join(exe).is_file())
+                .ok_or_else(|| anyhow::anyhow!("{exe} not found in the archive"))?;
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir)?;
             for e in std::fs::read_dir(&bin)?.filter_map(Result::ok) {
-                std::fs::copy(e.path(), dir.join(e.file_name()))?;
+                // ffmpeg and ffprobe (and on Windows their DLLs); ffplay isn't needed
+                if e.file_name().to_string_lossy().starts_with("ffplay") {
+                    continue;
+                }
+                let to = dir.join(e.file_name());
+                std::fs::copy(e.path(), &to)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o755))?;
+                }
             }
             let _ = std::fs::remove_dir_all(&tmp);
             Ok(())
         })
         .await;
         FFMPEG_FETCHING.store(false, Ordering::SeqCst);
+        FFMPEG_PCT.store(IDLE, Ordering::SeqCst);
+        TOOLS_GEN.fetch_add(1, Ordering::SeqCst);
         let _ = cx.update(|cx| {
+            cx.refresh_windows();
             let pending: Vec<_> = std::mem::take(&mut *PENDING.lock());
             match res {
                 Ok(()) => {
@@ -792,13 +915,15 @@ pub fn fetch_ytdlp(cx: &mut App) {
     if YTDLP_FETCHING.swap(true, Ordering::SeqCst) {
         return;
     }
+    YTDLP_PCT.store(0, Ordering::SeqCst);
     toast(cx, "Downloading yt-dlp…");
+    repaint_while(&YTDLP_FETCHING, cx);
     cx.spawn(async move |cx| {
         let res = crate::ui::blocking(|| -> anyhow::Result<()> {
             let name = if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" };
             let dest = store::data_dir().join(name);
             let tmp = store::data_dir().join(format!("{name}.part"));
-            download_github_asset(YTDLP_ASSET, &tmp)?;
+            download_github_asset_progress(YTDLP_ASSET, &tmp, Some(&YTDLP_PCT))?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -814,7 +939,10 @@ pub fn fetch_ytdlp(cx: &mut App) {
         })
         .await;
         YTDLP_FETCHING.store(false, Ordering::SeqCst);
+        YTDLP_PCT.store(IDLE, Ordering::SeqCst);
+        TOOLS_GEN.fetch_add(1, Ordering::SeqCst);
         let _ = cx.update(|cx| {
+            cx.refresh_windows();
             let pending: Vec<_> = std::mem::take(&mut *PENDING.lock());
             match res {
                 Ok(()) => {
@@ -840,5 +968,35 @@ mod fetch_tests {
         super::download_github_asset(super::YTDLP_ASSET, &p).unwrap();
         assert!(std::fs::metadata(&p).unwrap().len() > 1_000_000);
         let _ = std::fs::remove_file(&p);
+    }
+}
+
+#[cfg(test)]
+mod kids_download_tests {
+    use std::sync::atomic::AtomicBool;
+    /// A video made for kids downloads from the iOS HLS manifest when yt-dlp gets no formats.
+    /// network + yt-dlp: cargo test kids_download -- --ignored
+    #[::core::prelude::v1::test]
+    #[ignore]
+    fn kids_download() {
+        let bin = crate::api::streams::ytdlp_path().expect("yt-dlp");
+        let dir = std::env::temp_dir().join("st-kids-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = crate::store::settings_snapshot();
+        let cancel = AtomicBool::new(false);
+        let url = "https://www.youtube.com/watch?v=e_04ZrNroTo";
+        let fmt = "bv*[height<=360]+ba/b[height<=360]/b";
+        // yt-dlp alone fails, with an error that leads to the retries
+        if let Err(e) = super::ytdlp_run(&bin, &dir, url, fmt, &s, &["--extractor-args", super::YTDLP_IOS], None, &cancel, &|_, _| {}) {
+            println!("yt-dlp iOS: {e}");
+        }
+        let manifest = crate::api::streams::ios_hls_manifest("e_04ZrNroTo").unwrap();
+        let name = format!("{} [e_04ZrNroTo]", super::sanitize("Kids: test / video?").replace('%', "%%"));
+        let path = super::ytdlp_run(&bin, &dir, &manifest, fmt, &s, &[], Some(&name), &cancel, &|p, d| println!("{p:.2} {d}")).unwrap();
+        println!("{path}");
+        assert!(path.contains("e_04ZrNroTo"));
+        assert!(std::fs::metadata(&path).unwrap().len() > 1_000_000);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

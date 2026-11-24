@@ -45,6 +45,11 @@ pub fn forward_to_running(arg: &str) -> bool {
     let (Some(port), pid) = (parts.next().and_then(|p| p.parse::<u16>().ok()), parts.next().and_then(|p| p.parse::<u32>().ok())) else {
         return false;
     };
+    // Left over from an instance that has exited: connecting to its closed port
+    // only fails after the timeout on Windows, which delayed every launch.
+    if pid.is_some_and(|p| !process_alive(p)) {
+        return false;
+    }
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(400)) else { return false };
     let _ = stream.set_read_timeout(Some(Duration::from_millis(1500)));
@@ -64,6 +69,72 @@ pub fn forward_to_running(arg: &str) -> bool {
     }
     let mut reply = String::new();
     BufReader::new(stream).read_line(&mut reply).is_ok() && reply.trim() == "ok"
+}
+
+/// Makes `streamtube://` links open this app when nothing handles them yet (the
+/// portable zip; the installer registers them itself). Runs in the background.
+pub fn register_scheme() {
+    #[cfg(windows)]
+    std::thread::spawn(|| {
+        use std::process::Command;
+        let Ok(exe) = std::env::current_exe() else { return };
+        let key = r"HKCU\Software\Classes\streamtube";
+        let reg = |args: &[&str]| {
+            let mut c = Command::new("reg");
+            c.args(args);
+            crate::api::streams::hide_window(&mut c);
+            c.output().map(|o| o.status.success()).unwrap_or(false)
+        };
+        if reg(&["query", &format!(r"{key}\shell\open\command"), "/ve"]) {
+            return; // registered already (by the installer or an earlier run)
+        }
+        let exe = exe.to_string_lossy();
+        let cmd = format!("\"{exe}\" \"%1\"");
+        let _ = reg(&["add", key, "/ve", "/d", "URL:Stream Tube", "/f"])
+            && reg(&["add", key, "/v", "URL Protocol", "/d", "", "/f"])
+            && reg(&["add", &format!(r"{key}\DefaultIcon"), "/ve", "/d", &format!("{exe},0"), "/f"])
+            && reg(&["add", &format!(r"{key}\shell\open\command"), "/ve", "/d", &cmd, "/f"]);
+    });
+}
+
+/// Whether a process with this id is running.
+fn process_alive(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        const STILL_ACTIVE: u32 = 259;
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+            fn GetExitCodeProcess(process: isize, code: *mut u32) -> i32;
+            fn CloseHandle(handle: isize) -> i32;
+        }
+        // SAFETY: plain Win32 calls on a handle we open and close here
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h == 0 {
+                return false;
+            }
+            let mut code = 0u32;
+            let ok = GetExitCodeProcess(h, &mut code) != 0;
+            CloseHandle(h);
+            !ok || code == STILL_ACTIVE
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        let Ok(p) = i32::try_from(pid) else { return false };
+        if unsafe { kill(p, 0) } == 0 {
+            return true;
+        }
+        if std::io::Error::last_os_error().raw_os_error() == Some(1) {
+            return true;
+        }
+        std::path::Path::new(&format!("/proc/{pid}")).exists()
+    }
 }
 
 /// Listens for links from later launches; each arrives on the returned channel.
@@ -97,6 +168,12 @@ pub fn listen() -> Option<futures::channel::mpsc::UnboundedReceiver<String>> {
 #[cfg(test)]
 mod tests {
     use super::normalize;
+
+    #[test]
+    fn alive() {
+        assert!(super::process_alive(std::process::id()));
+        assert!(!super::process_alive(u32::MAX - 1));
+    }
 
     #[test]
     fn scheme_links() {

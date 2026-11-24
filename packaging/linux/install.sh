@@ -19,6 +19,8 @@ install -m 755 "$here/rusttube" "$bin/rusttube"
 install -m 644 "$here/rusttube.png" "$icons/rusttube.png"
 sed "s|^Exec=rusttube|Exec=$bin/rusttube|" "$here/rusttube.desktop" > "$apps/rusttube.desktop"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$apps" >/dev/null 2>&1 || true
+# streamtube:// links (the browser userscript) open the app
+command -v xdg-mime >/dev/null 2>&1 && xdg-mime default streamtube.desktop x-scheme-handler/streamtube >/dev/null 2>&1 || true
 
 echo "RustTube installed to $bin/rusttube"
 if ! ldconfig -p 2>/dev/null | grep -q "libmpv\.so"; then
@@ -28,4 +30,5 @@ if ! ldconfig -p 2>/dev/null | grep -q "libmpv\.so"; then
     echo "  Fedora:         sudo dnf install mpv-libs"
     echo "  Arch:           sudo pacman -S mpv"
 fi
-echo "Optional, for downloads above 360p: yt-dlp and ffmpeg from your package manager."
+echo "Downloads above 360p use yt-dlp and FFmpeg. Install them with your package manager,"
+echo "or let Stream Tube fetch them (Settings -> Downloads)."

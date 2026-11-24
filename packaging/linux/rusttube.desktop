@@ -8,4 +8,5 @@ Icon=rusttube
 Terminal=false
 Categories=AudioVideo;Video;Player;Network;
 Keywords=youtube;video;player;
+MimeType=x-scheme-handler/rusttube;x-scheme-handler/streamtube;
 StartupWMClass=rusttube

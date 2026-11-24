@@ -41,6 +41,10 @@ pub struct SettingsPage {
     inputs: Vec<(&'static str, Entity<InputState>)>,
     keyword: Entity<InputState>,
     ytdlp_version: Option<String>,
+    /// whether FFmpeg was found (None until checked)
+    ffmpeg_found: Option<bool>,
+    /// downloads::tools_generation() when the tools were last looked for
+    tools_gen: u64,
     /// open dropdown (by id) and when the last one closed (an outside click closes it
     /// right before the button's own click would reopen it)
     open_dd: Option<&'static str>,
@@ -119,6 +123,8 @@ impl SettingsPage {
             inputs,
             keyword,
             ytdlp_version: None,
+            ffmpeg_found: None,
+            tools_gen: crate::downloads::tools_generation(),
             open_dd: None,
             dd_closed_at: std::time::Instant::now() - std::time::Duration::from_secs(5),
             search,
@@ -127,6 +133,13 @@ impl SettingsPage {
             _subs: subs,
         };
         page.load_sb_stats(cx);
+        page.check_tools(cx);
+        page.section = Section::General;
+        page
+    }
+
+    /// Looks for yt-dlp and FFmpeg (again after either was downloaded).
+    fn check_tools(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let v = blocking(|| {
                 crate::api::streams::ytdlp_path().and_then(|p| {
@@ -137,14 +150,14 @@ impl SettingsPage {
                 })
             })
             .await;
+            let ff = blocking(|| crate::downloads::ffmpeg_path().is_some()).await;
             let _ = this.update(cx, |t, cx| {
                 t.ytdlp_version = v;
+                t.ffmpeg_found = Some(ff);
                 cx.notify();
             });
         })
         .detach();
-        page.section = Section::General;
-        page
     }
 
     fn load_sb_stats(&mut self, cx: &mut Context<Self>) {
@@ -428,7 +441,8 @@ impl SettingsPage {
                 .occlude()
                 .flex()
                 .flex_col()
-                .max_h(px(340.))
+                // short enough to fit above or below the button in any window
+                .max_h(px(340f32.min(f32::from(cx.global::<crate::ui::app::UiState>().viewport.height) * 0.5 - 48.).max(120.)))
                 .overflow_y_scroll()
                 .py_1()
                 .rounded_lg()
@@ -472,7 +486,15 @@ impl SettingsPage {
                 Animation::new(std::time::Duration::from_millis(140)).with_easing(ease_out_quint()),
                 |d, t| d.opacity(t).mt(px((1. - t) * -6.)),
             );
-            el = el.child(deferred(div().absolute().top(px(40.)).left_0().w_full().child(list)).with_priority(5));
+            // Anchored at the button: the list opens below it, or above it when
+            // the window has no room below. The 40px top padding is the button's
+            // height, so in either case the list sits just beside the button.
+            el = el.child(
+                div().absolute().top_0().left_0().w_full().child(
+                    deferred(anchored().child(div().w(px(width)).pt(px(40.)).child(nested_scroll(SharedString::from(format!("{id}-wrap")), list))))
+                        .with_priority(5),
+                ),
+            );
         }
         el.into_any_element()
     }
@@ -512,6 +534,12 @@ impl SettingsPage {
             .child(row("Jump ahead", "Button to skip to the most replayed part", switch("jump", s.jump_ahead, |s, v| s.jump_ahead = v, cx), cx))
             .child(row("Enhanced bitrate", "Picks the highest-bitrate stream YouTube offers for the chosen quality", switch("ebr", s.enhanced_bitrate, |s, v| s.enhanced_bitrate = v, cx), cx))
             .child(row("Ambient mode", "Soft glow of the video's colors around the player", switch("amb", s.ambient_mode, |s, v| s.ambient_mode = v, cx), cx))
+            .child(row(
+                "Annotations",
+                "Notes and links on older videos, restored from the Annotations Restored archive",
+                switch("ann", s.annotations, |s, v| s.annotations = v, cx),
+                cx,
+            ))
             .child(row("Force original audio", "Play the original language instead of auto-dubbed tracks", switch("orig", s.original_audio, |s, v| s.original_audio = v, cx), cx))
     }
 
@@ -559,6 +587,12 @@ impl SettingsPage {
             .child(row("Accent color", "Switches, highlights, progress and the seek bar", accent_swatches(s.accent, cx), cx))
             .child(row("Start page", "", self.choice("start", &[("home".to_string(), "Home"), ("subscriptions".to_string(), "Subscriptions"), ("history".to_string(), "History")], s.start_page.clone(), |s, v| s.start_page = v, cx), cx))
             .child(row("Interface size", "", self.choice("scale", &[(0.9f32, "90%"), (1.0, "100%"), (1.1, "110%"), (1.25, "125%")], s.ui_scale, |s, v| s.ui_scale = v, cx), cx))
+            .child(row(
+                "Always show scrollbars",
+                "Otherwise they appear when the pointer is over a page. Drag one, or click its track, to scroll",
+                switch("sbar", s.always_scrollbars, |s, v| s.always_scrollbars = v, cx),
+                cx,
+            ))
             .child(row("Density", "", self.choice("density", &[("compact".to_string(), "Compact"), ("default".to_string(), "Default"), ("comfortable".to_string(), "Comfortable")], s.density.clone(), |s, v| s.density = v, cx), cx))
             .child(row("Thumbnail corners", "", self.choice("radius", &[(0.0f32, "Square"), (6.0, "Small"), (12.0, "Rounded"), (18.0, "Large")], s.thumb_radius, |s, v| s.thumb_radius = v, cx), cx))
             .child(row("Grid columns", "", self.choice("cols", &[(0u32, "Auto"), (3, "3"), (4, "4"), (5, "5"), (6, "6")], s.grid_columns, |s, v| s.grid_columns = v, cx), cx))
@@ -965,6 +999,41 @@ impl SettingsPage {
                 self.choice("df", &crate::downloads::FORMATS.iter().map(|(k, l)| (k.to_string(), *l)).collect::<Vec<_>>(), s.download_format.clone(), |s, v| s.download_format = v, cx),
                 cx,
             ))
+            .child(row(
+                "yt-dlp",
+                &match &self.ytdlp_version {
+                    Some(v) => format!("Installed ({v}). Downloads in every quality, with SponsorBlock chapters"),
+                    None => "Needed for downloads above 360p. Stream Tube can fetch it for you".into(),
+                },
+                if let Some(f) = crate::downloads::ytdlp_fetch() {
+                    fetch_progress("ytdlp-prog", f, cx)
+                } else if self.ytdlp_version.is_some() {
+                    div().into_any_element()
+                } else {
+                    pill("get-ytdlp", Some("download"), &format!("Get yt-dlp ({})", crate::downloads::YTDLP_SIZE), cx)
+                        .on_click(|_, _, cx| crate::downloads::fetch_ytdlp(cx))
+                        .into_any_element()
+                },
+                cx,
+            ))
+            .child(row(
+                "FFmpeg",
+                match self.ffmpeg_found {
+                    Some(true) => "Installed. Joins the video and audio of downloads above 360p",
+                    Some(false) => "Needed to join video and audio above 360p. Stream Tube can fetch it for you",
+                    None => "",
+                },
+                if let Some(f) = crate::downloads::ffmpeg_fetch() {
+                    fetch_progress("ffmpeg-prog", f, cx)
+                } else if self.ffmpeg_found == Some(false) {
+                    pill("get-ffmpeg", Some("download"), &format!("Get FFmpeg ({})", crate::downloads::FFMPEG_SIZE), cx)
+                        .on_click(|_, _, cx| crate::downloads::fetch_ffmpeg(cx))
+                        .into_any_element()
+                } else {
+                    div().into_any_element()
+                },
+                cx,
+            ))
     }
 
     fn data(&self, cx: &mut Context<Self>) -> Div {
@@ -1083,6 +1152,12 @@ fn export_button(id: &'static str, name: &'static str, kind: ExportKind, cx: &Ap
 
 impl Render for SettingsPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tools_gen = crate::downloads::tools_generation();
+        if tools_gen != self.tools_gen {
+            // a tool finished downloading: show it as installed without a reload
+            self.tools_gen = tools_gen;
+            self.check_tools(cx);
+        }
         let p = pal(cx);
         let query = self.search.read(cx).value().trim().to_lowercase();
         QUERY.with(|q| *q.borrow_mut() = query.clone());
@@ -1181,4 +1256,22 @@ impl Render for SettingsPage {
             ),
         )
     }
+}
+
+/// "Downloading… 42%" with a bar, shown in place of a tool's Get button.
+fn fetch_progress(id: &'static str, f: crate::downloads::ToolFetch, cx: &App) -> AnyElement {
+    let p = pal(cx);
+    let (label, frac) = match f {
+        crate::downloads::ToolFetch::Downloading(n) => (format!("Downloading… {n}%"), n as f32 / 100.0),
+        crate::downloads::ToolFetch::Unpacking => ("Unpacking…".to_string(), 1.0),
+    };
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .gap_1()
+        .w(px(180.))
+        .child(div().text_sm().text_color(p.text2).child(label))
+        .child(div().h(px(4.)).w_full().rounded_full().bg(p.hover).child(div().h_full().w(relative(frac)).rounded_full().bg(p.accent)))
+        .into_any_element()
 }

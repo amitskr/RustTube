@@ -49,6 +49,8 @@ pub struct Player {
     pub queue_pos: Option<usize>,
     pub chapters: Vec<Chapter>,
     pub heatmap: Vec<(f64, f64, f32)>,
+    /// archived annotations of the current video
+    pub annotations: Arc<Vec<crate::api::annotations::Annotation>>,
     /// average colour of recent frames, for the ambient glow
     pub ambient: Option<Rgba>,
     ambient_tick: u32,
@@ -133,6 +135,7 @@ impl Player {
             queue_pos: None,
             chapters: Vec::new(),
             heatmap: Vec::new(),
+            annotations: Arc::new(Vec::new()),
             ambient: None,
             ambient_tick: 0,
             loop_video: s.loop_video,
@@ -498,6 +501,7 @@ impl Player {
         self.storyboard = None;
         self.chapters.clear();
         self.heatmap.clear();
+        self.annotations = Arc::new(Vec::new());
         self.ambient = None;
         self.channel_id = video.channel_id.clone();
         self.audio_track = None;
@@ -521,6 +525,9 @@ impl Player {
             None
         };
         cx.notify();
+        if s.annotations {
+            self.load_annotations(cx);
+        }
         cx.spawn(async move |this, cx| {
             let id2 = id.clone();
             let streams_fut = blocking(move || streams::get_streams(&id2));
@@ -594,6 +601,22 @@ impl Player {
                     }
                 }
                 cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Fetches the current video's archived annotations (most videos have none).
+    pub fn load_annotations(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.video.as_ref().map(|v| v.id.clone()) else { return };
+        let serial = self.load_serial;
+        cx.spawn(async move |this, cx| {
+            let list = blocking(move || crate::api::annotations::fetch(&id).unwrap_or_default()).await;
+            let _ = this.update(cx, |p, cx| {
+                if p.load_serial == serial && !list.is_empty() {
+                    p.annotations = Arc::new(list);
+                    cx.notify();
+                }
             });
         })
         .detach();

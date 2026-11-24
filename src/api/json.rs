@@ -59,6 +59,51 @@ pub fn find_all<'a>(v: &'a Value, key: &str, out: &mut Vec<&'a Value>) {
     }
 }
 
+/// Renderers that only ever hold ads or paid promotions. Their contents look like
+/// ordinary videos (an ad's own video, usually unlisted and unplayable), so the
+/// whole subtree is skipped.
+pub const AD_RENDERERS: &[&str] = &[
+    "adSlotRenderer",
+    "inFeedAdLayoutRenderer",
+    "adSlotAndLayoutMetadata",
+    "promotedVideoRenderer",
+    "compactPromotedVideoRenderer",
+    "promotedSparklesWebRenderer",
+    "promotedSparklesTextSearchRenderer",
+    "searchPyvRenderer",
+    "bannerPromoRenderer",
+    "statementBannerRenderer",
+    "brandVideoShelfRenderer",
+    "brandVideoSingletonRenderer",
+    "videoMastheadAdV3Renderer",
+    "mastheadAdV4Renderer",
+    "primetimePromoRenderer",
+    "playerLegacyDesktopWatchAdsRenderer",
+    "adBreakServiceRenderer",
+    "displayAdRenderer",
+    "actionCompanionAdRenderer",
+    "feedAdMetadataViewModel",
+];
+
+/// Fields that only appear on ads, also when YouTube draws an ad with a regular
+/// video renderer or lockup.
+const AD_MARKERS: &[&str] = &["adSlotLoggingData", "adLayoutLoggingData", "adClientParams", "adVideoId", "promotedVideoRenderer"];
+
+/// Whether a renderer is an ad: it carries an ad-only field or an "Ad"/"Sponsored" badge.
+pub fn is_ad(v: &Value) -> bool {
+    match v {
+        Value::Object(m) => m.iter().any(|(k, c)| {
+            AD_MARKERS.contains(&k.as_str())
+                || AD_RENDERERS.contains(&k.as_str())
+                || ((k == "style" || k == "badgeStyle") && matches!(c.as_str(), Some("BADGE_STYLE_TYPE_AD" | "BADGE_STYLE_TYPE_AD_INFO")))
+                || (k == "iconType" && c.as_str() == Some("AD_BADGE"))
+                || is_ad(c)
+        }),
+        Value::Array(a) => a.iter().any(is_ad),
+        _ => false,
+    }
+}
+
 /// Largest thumbnail url in a {thumbnails:[...]} or {sources:[...]} object.
 pub fn best_thumb(v: &Value) -> Option<String> {
     let arr = v
@@ -144,38 +189,100 @@ pub fn format_duration(secs: u64) -> String {
 }
 
 /// Converts "3 days ago" / "3d ago" / "Streamed 2 weeks ago" into an approximate unix timestamp.
+/// "3 days ago", "3d", and the same in the common European languages YouTube
+/// answers in ("il y a 3 jours", "vor 3 Tagen", "hace 3 días", "3 giorni fa", ...).
 pub fn parse_relative_time(s: &str) -> Option<i64> {
+    relative_secs(s).map(|secs| now() - secs)
+}
+
+fn relative_secs(s: &str) -> Option<i64> {
     let lower = s.to_lowercase();
-    let lower = lower.replace("streamed", "").replace("premiered", "");
-    let mut words = lower.split_whitespace();
-    let first = words.next()?;
-    // split leading digits from unit (compact form like "17y", "2mo")
-    let digits: String = first.chars().take_while(|c| c.is_ascii_digit()).collect();
-    let (n, unit) = if digits.is_empty() {
+    // view and subscriber counts also start with a number ("3 M de vues")
+    const COUNTS: [&str; 11] =
+        ["view", "vue", "aufruf", "visualiz", "vista", "weergave", "watching", "spectat", "zuschau", "subscri", "abonn"];
+    if COUNTS.iter().any(|c| lower.contains(c)) {
         return None;
-    } else if digits.len() < first.len() {
-        (digits.parse::<i64>().ok()?, first[digits.len()..].to_string())
-    } else {
-        (digits.parse::<i64>().ok()?, words.next().unwrap_or("").to_string())
-    };
-    let secs = if unit.starts_with("mo") {
+    }
+    let start = lower.find(|c: char| c.is_ascii_digit())?;
+    let rest = &lower[start..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let n: i64 = digits.parse().ok()?;
+    let after = &rest[digits.len()..];
+    // "1.2K" / "3,4 M" are counts, not times
+    if after.starts_with('.') || after.starts_with(',') {
+        return None;
+    }
+    // "5m" (English compact) touches the number; "21 M" on its own is a count
+    let attached = !after.starts_with(char::is_whitespace);
+    let unit: String = after.trim_start().chars().take_while(|c| c.is_alphabetic()).collect();
+    let u = unit.as_str();
+    let p = |prefixes: &[&str]| prefixes.iter().any(|x| u.starts_with(x));
+    let secs = if u.is_empty() || u == "k" {
+        return None;
+    } else if u == "m" {
+        if attached {
+            60
+        } else if lower.contains("il y a") {
+            // "il y a 1 m." is a month in French's short form
+            30 * 86400
+        } else {
+            return None;
+        }
+    } else if p(&["mo", "mois", "mes", "monat", "maand", "mies"]) {
         30 * 86400
-    } else if unit.starts_with("sec") || unit == "s" {
-        1
-    } else if unit.starts_with("min") || unit == "m" {
+    } else if p(&["min"]) {
         60
-    } else if unit.starts_with('h') {
-        3600
-    } else if unit.starts_with('d') {
-        86400
-    } else if unit.starts_with('w') {
+    } else if p(&["sem", "settiman", "woche", "week", "wk", "w", "tydz"]) {
         7 * 86400
-    } else if unit.starts_with('y') {
+    } else if p(&["sec", "seg", "sek", "seconde", "secondo"]) || u == "s" {
+        1
+    } else if p(&["h", "heure", "stund", "ora", "ore", "uur", "godz"]) {
+        3600
+    } else if p(&["d", "jour", "j", "tag", "giorn", "dag", "dzie"]) {
+        86400
+    } else if p(&["y", "an", "añ", "jahr", "jaar", "ann", "rok", "lat"]) || u == "a" {
         365 * 86400
     } else {
         return None;
     };
-    Some(now() - n * secs)
+    Some(n * secs)
+}
+
+#[cfg(test)]
+mod relative_time_tests {
+    use super::relative_secs;
+    #[test]
+    fn languages() {
+        let day = 86400;
+        for (s, want) in [
+            ("3 days ago", 3 * day),
+            ("Streamed 2 weeks ago", 14 * day),
+            ("17y", 17 * 365 * day),
+            ("2mo", 60 * day),
+            ("5 minutes ago", 300),
+            ("il y a 3 jours", 3 * day),
+            ("il y a 2 semaines", 14 * day),
+            ("il y a 1 mois", 30 * day),
+            ("il y a 4 ans", 4 * 365 * day),
+            ("vor 3 Tagen", 3 * day),
+            ("vor 5 Stunden", 5 * 3600),
+            ("hace 2 días", 2 * day),
+            ("hace 1 año", 365 * day),
+            ("há 3 meses", 90 * day),
+            ("3 giorni fa", 3 * day),
+            ("2 ore fa", 7200),
+            ("1 uur geleden", 3600),
+            ("il y a 1 m.", 30 * day),
+            ("il y a 16 a", 16 * 365 * day),
+            ("il y a 2\u{a0}j", 2 * day),
+            ("5m", 300),
+        ] {
+            assert_eq!(relative_secs(s), Some(want), "{s}");
+        }
+        for s in ["1.2M views", "3 M de vues", "12 k vues", "1,5 Mio. Aufrufe", "450 watching", "Ed Sheeran", "100% DOCS", "21\u{a0}M", "4,8\u{a0}k", "2,5\u{a0}Md", "7,5 k spectateurs"] {
+            assert_eq!(relative_secs(s), None, "{s}");
+        }
+    }
 }
 
 pub fn now() -> i64 {
@@ -205,6 +312,20 @@ pub fn relative_from_ts(ts: i64) -> String {
     format!("{n} {u}{} ago", if n == 1 { "" } else { "s" })
 }
 
+/// "27K", "1.2M", "27,124", "3 likes" -> a number; None without digits.
+pub fn parse_count(s: &str) -> Option<u64> {
+    let t: String = s.trim().chars().filter(|c| *c != ',' && !c.is_whitespace()).collect();
+    let end = t.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(t.len());
+    let num: f64 = t[..end].parse().ok()?;
+    let mult = match t[end..].chars().next().map(|c| c.to_ascii_uppercase()) {
+        Some('K') => 1e3,
+        Some('M') => 1e6,
+        Some('B') => 1e9,
+        _ => 1.0,
+    };
+    Some((num * mult).round() as u64)
+}
+
 pub fn compact_number(n: u64) -> String {
     match n {
         0..=999 => n.to_string(),
@@ -230,5 +351,18 @@ mod tests {
         assert!((parse_relative_time("Streamed 1 hour ago").unwrap() - (n - 3600)).abs() < 5);
         assert_eq!(parse_duration("1:02:03"), Some(3723));
         assert_eq!(compact_number(1_234_567), "1.2M");
+    }
+}
+
+#[cfg(test)]
+mod count_tests {
+    #[test]
+    fn counts() {
+        use super::parse_count;
+        assert_eq!(parse_count("27K"), Some(27_000));
+        assert_eq!(parse_count("1.2M"), Some(1_200_000));
+        assert_eq!(parse_count("27,124"), Some(27_124));
+        assert_eq!(parse_count("403"), Some(403));
+        assert_eq!(parse_count("Like"), None);
     }
 }
