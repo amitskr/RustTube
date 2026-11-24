@@ -96,8 +96,12 @@ jobs:
 
           # GitHub turns "~" in asset names into "."; the file names use the plain
           # version, the package metadata keeps "~" so upgrades sort correctly
-          mv dist/*.deb "dist/rusttube_${version}_amd64.deb"
-          mv dist/*.rpm "dist/rusttube-${version}.x86_64.rpm"
+          for f in dist/*.deb; do
+            [ "$f" = "dist/rusttube_${version}_amd64.deb" ] || mv "$f" "dist/rusttube_${version}_amd64.deb"
+          done
+          for f in dist/*.rpm; do
+            [ "$f" = "dist/rusttube-${version}.x86_64.rpm" ] || mv "$f" "dist/rusttube-${version}.x86_64.rpm"
+          done
           ls -l dist
           deb=$(ls dist/*.deb); rpm=$(ls dist/*.rpm)
           dpkg-deb --info "$deb"
