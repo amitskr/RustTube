@@ -1,9 +1,9 @@
 ; RustTube installer (Inno Setup 6)
-; Build:  ISCC.exe /DAppVersion=1.0.0 installer\streamtube.iss
+; Build:  ISCC.exe /DAppVersion=1.0.1 installer\streamtube.iss
 ; Needs a release build in target\release and libmpv-2.dll in third_party\mpv.
 
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.0.1"
 #endif
 #define AppName "RustTube"
 #define AppExe "rusttube.exe"
