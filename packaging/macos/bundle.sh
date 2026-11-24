@@ -35,7 +35,7 @@ cp "$SCRIPT_DIR/rusttube.icns" "$APP_DIR/Contents/Resources/rusttube.icns"
 
 # Update version in Info.plist from Cargo.toml if needed
 VERSION=$(grep -m1 '^version' "$ROOT_DIR/Cargo.toml" | cut -d'"' -f2)
-sed "s|<string>0.5.1-alpha</string>|<string>$VERSION</string>|g" "$SCRIPT_DIR/Info.plist" > "$APP_DIR/Contents/Info.plist"
+sed -E "s|(<string>)[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9]+)?(</string>)|\1$VERSION\3|g" "$SCRIPT_DIR/Info.plist" > "$APP_DIR/Contents/Info.plist"
 
 # Bundle libmpv if available in Homebrew or Frameworks
 if [ -f "/opt/homebrew/lib/libmpv.dylib" ]; then

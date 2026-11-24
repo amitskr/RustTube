@@ -1,6 +1,6 @@
 [package]
 name = "rusttube"
-version = "0.7.2-alpha"
+version = "1.0.0"
 edition = "2024"
 description = "A YouTube desktop client in Rust + GPUI with SponsorBlock, DeArrow, RYD, local subscriptions & macOS/Windows/Linux support"
 license = "MIT"
