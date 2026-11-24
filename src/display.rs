@@ -59,7 +59,7 @@ pub fn choose() {
         if DRAWN.load(Ordering::Relaxed) {
             return;
         }
-        eprintln!("Stream Tube: the Wayland window didn't appear; restarting on X11 (Settings → Backend & network → Display server)");
+        eprintln!("RustTube: the Wayland window didn't appear; restarting on X11 (Settings → Backend & network → Display server)");
         crate::store::update_settings(|s| s.display_server = "x11".into());
         let Ok(exe) = std::env::current_exe() else { return };
         let started = std::process::Command::new(exe)

@@ -191,7 +191,7 @@ impl Default for Settings {
             feed_include_shorts: false,
             feed_include_live: true,
             download_dir: dirs::download_dir()
-                .map(|d| d.join("Stream Tube").to_string_lossy().into_owned())
+                .map(|d| d.join("RustTube").to_string_lossy().into_owned())
                 .unwrap_or_default(),
             download_dir_chosen: false,
             download_format: "1080".into(),

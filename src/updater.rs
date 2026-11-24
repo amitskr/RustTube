@@ -179,7 +179,7 @@ pub fn check_now(manual: bool, cx: &mut App) {
             Ok(None) => {
                 set_status(Status::UpToDate, cx);
                 if manual {
-                    toast(cx, format!("Stream Tube {} is the latest version", current_version()));
+                    toast(cx, format!("RustTube {} is the latest version", current_version()));
                 }
             }
             Err(e) => {

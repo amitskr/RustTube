@@ -90,7 +90,7 @@ pub fn register_scheme() {
         }
         let exe = exe.to_string_lossy();
         let cmd = format!("\"{exe}\" \"%1\"");
-        let _ = reg(&["add", key, "/ve", "/d", "URL:Stream Tube", "/f"])
+        let _ = reg(&["add", key, "/ve", "/d", "URL:RustTube", "/f"])
             && reg(&["add", key, "/v", "URL Protocol", "/d", "", "/f"])
             && reg(&["add", &format!(r"{key}\DefaultIcon"), "/ve", "/d", &format!("{exe},0"), "/f"])
             && reg(&["add", &format!(r"{key}\shell\open\command"), "/ve", "/d", &cmd, "/f"]);

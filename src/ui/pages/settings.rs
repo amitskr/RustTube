@@ -524,7 +524,7 @@ impl SettingsPage {
                     div()
                         .text_sm()
                         .text_color(p.text)
-                        .child("These are built into Stream Tube, so they work without YouTube Premium and without signing in."),
+                        .child("These are built into RustTube, so they work without YouTube Premium and without signing in."),
                 )
         });
         card(cx)
@@ -929,7 +929,7 @@ impl SettingsPage {
         card(cx)
             .child(row(
                 "Playback client",
-                "Which YouTube app Stream Tube presents itself as to get video streams. Try another one if videos stop playing or fail to load.",
+                "Which YouTube app RustTube presents itself as to get video streams. Try another one if videos stop playing or fail to load.",
                 self.choice(
                     "sb2",
                     &[
@@ -1003,7 +1003,7 @@ impl SettingsPage {
                 "yt-dlp",
                 &match &self.ytdlp_version {
                     Some(v) => format!("Installed ({v}). Downloads in every quality, with SponsorBlock chapters"),
-                    None => "Needed for downloads above 360p. Stream Tube can fetch it for you".into(),
+                    None => "Needed for downloads above 360p. RustTube can fetch it for you".into(),
                 },
                 if let Some(f) = crate::downloads::ytdlp_fetch() {
                     fetch_progress("ytdlp-prog", f, cx)
@@ -1020,7 +1020,7 @@ impl SettingsPage {
                 "FFmpeg",
                 match self.ffmpeg_found {
                     Some(true) => "Installed. Joins the video and audio of downloads above 360p",
-                    Some(false) => "Needed to join video and audio above 360p. Stream Tube can fetch it for you",
+                    Some(false) => "Needed to join video and audio above 360p. RustTube can fetch it for you",
                     None => "",
                 },
                 if let Some(f) = crate::downloads::ffmpeg_fetch() {
@@ -1050,7 +1050,7 @@ impl SettingsPage {
                 card(cx)
                     .child(row(
                         "Import",
-                        "Takeout, NewPipe, FreeTube, OPML or Stream Tube backup",
+                        "Takeout, NewPipe, FreeTube, OPML or RustTube backup",
                         pill("imp", Some("upload"), "Choose file…", cx).on_click(|_, _, cx| {
                             let rx = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some("Import".into()) });
                             cx.spawn(async move |cx| {

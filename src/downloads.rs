@@ -429,7 +429,7 @@ pub fn open_external_at(id: &str, time: f64, cx: &mut App) {
     cx.spawn(async move |cx| {
         let res = crate::ui::blocking(move || launch_external(&id, time, &custom)).await;
         let _ = cx.update(|cx| match res {
-            Ok(name) => toast(cx, format!("Playing in {name}. Keep Stream Tube open while it plays")),
+            Ok(name) => toast(cx, format!("Playing in {name}. Keep RustTube open while it plays")),
             Err(e) => toast(cx, format!("Couldn't open a video player: {e}")),
         });
     })
@@ -467,7 +467,7 @@ pub fn detect_player() -> Option<(&'static str, String)> {
 
 /// Resolves the streams and starts a player on them. The streams are served by the
 /// app's local proxy (YouTube refuses the open-ended requests media players make),
-/// so playback keeps working only while Stream Tube is open.
+/// so playback keeps working only while RustTube is open.
 fn launch_external(id: &str, time: f64, custom: &str) -> anyhow::Result<String> {
     let info = streams::get_streams(id)?;
     let s = store::settings_snapshot();
