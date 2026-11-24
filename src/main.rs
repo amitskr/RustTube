@@ -88,6 +88,9 @@ fn main() {
             player::controller::init(cx);
             perf::mark("player init");
             let opts = WindowOptions {
+                // Without this the Wayland/X11 window has no identity, so docks and
+                // taskbars can't match it to rusttube.desktop (StartupWMClass).
+                app_id: Some("rusttube".into()),
                 window_bounds: Some(saved_window_bounds(cx)),
                 titlebar: Some(TitlebarOptions { title: Some("RustTube".into()), appears_transparent: true, ..Default::default() }),
                 window_min_size: Some(size(px(720.), px(480.))),
