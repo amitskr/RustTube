@@ -58,9 +58,11 @@ jobs:
 
   macos:
     needs: check
+    continue-on-error: true
     uses: ./.github/workflows/macos.yml
 
   publish:
+    if: always() && needs.check.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success'
     needs: [check, linux, windows, macos]
     runs-on: ubuntu-latest
     permissions:
