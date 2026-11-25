@@ -58,7 +58,6 @@ jobs:
 
   macos:
     needs: check
-    continue-on-error: true
     uses: ./.github/workflows/macos.yml
 
   publish:
