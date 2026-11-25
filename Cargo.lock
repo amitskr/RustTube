@@ -5564,7 +5564,7 @@ dependencies = [
 
 [[package]]
 name = "rusttube"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5575,6 +5575,7 @@ dependencies = [
  "gpui-kit",
  "image",
  "libloading 0.9.1",
+ "objc2 0.6.5",
  "open",
  "parking_lot",
  "rand 0.9.5",
@@ -5587,6 +5588,7 @@ dependencies = [
  "smallvec",
  "tungstenite",
  "ureq",
+ "windows 0.62.2",
 ]
 
 [[package]]

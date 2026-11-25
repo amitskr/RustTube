@@ -6,6 +6,7 @@ mod perf;
 mod recommend;
 mod downloads;
 mod feed;
+mod i18n;
 mod import;
 mod links;
 mod locale;
@@ -80,6 +81,7 @@ fn main() {
         .run(|cx: &mut App| {
             perf::mark("gpui running");
             gpui_kit::init(cx);
+            i18n::apply_component_locale();
             perf::mark("gpui_kit init");
             player::preview::init(cx);
             perf::mark("preview init");
