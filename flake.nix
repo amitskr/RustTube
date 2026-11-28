@@ -25,6 +25,7 @@
           libxi
           fontconfig
           freetype
+          noto-fonts
           openssl
           zstd
           sqlite
@@ -79,7 +80,8 @@
 
             wrapProgram $out/bin/streamtube \
               --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath runtimeLibs}" \
-              --prefix PATH : "${pkgs.lib.makeBinPath [ pkgs.yt-dlp pkgs.ffmpeg-headless ]}"
+              --prefix PATH : "${pkgs.lib.makeBinPath [ pkgs.yt-dlp pkgs.ffmpeg-headless ]}" \
+              --set FONTCONFIG_FILE "${pkgs.makeFontsConf { fontDirectories = [ pkgs.noto-fonts ]; }}"
           '';
 
           meta = with pkgs.lib; {

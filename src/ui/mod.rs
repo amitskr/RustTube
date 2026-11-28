@@ -1,10 +1,13 @@
 pub mod app;
 pub mod app_icon;
 pub mod cards;
+pub(crate) mod history;
 pub mod image_cache;
+pub mod music;
 pub mod pages;
 pub mod pip;
 pub mod slot;
+pub mod transcript_menu;
 #[cfg(target_os = "linux")]
 mod topbar_drag;
 pub mod widgets;
@@ -362,12 +365,20 @@ pub fn friendly_error(err: &str) -> String {
     if lower.contains("private video") {
         return t("This video is private.").into();
     }
+    if lower.contains("playback stopped before the end of the video") {
+        return t("Playback stopped before the end of the video.").into();
+    }
     let line = err.lines().next().unwrap_or(err).trim();
     // which YouTube client failed is a detail, not news
     let line = ["visionOS: ", "Android VR: ", "Innertube: ", "yt-dlp: "]
         .iter()
         .fold(line, |l, p| l.strip_prefix(p).unwrap_or(l));
     if line.chars().count() > 160 { format!("{}…", line.chars().take(160).collect::<String>()) } else { line.to_string() }
+}
+
+/// Scale each thumbnail's usual corner radius by the user's selected size.
+pub(crate) fn thumbnail_corner_scale() -> f32 {
+    crate::store::settings_snapshot().thumb_radius / 12.0
 }
 
 pub fn avatar(url: Option<&str>, size: Pixels, name: &str, cx: &App) -> AnyElement {
@@ -403,6 +414,11 @@ pub fn avatar(url: Option<&str>, size: Pixels, name: &str, cx: &App) -> AnyEleme
 pub fn copy_to_clipboard(text: String, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(text));
     toast(cx, crate::i18n::t("Link copied to clipboard"));
+}
+
+pub fn copy_text_to_clipboard(text: String, cx: &mut App) {
+    cx.write_to_clipboard(ClipboardItem::new_string(text));
+    toast(cx, crate::i18n::t("Copied to clipboard"));
 }
 
 /// Brand colors of the Stream Tube logo.

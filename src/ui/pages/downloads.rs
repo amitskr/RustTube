@@ -21,6 +21,7 @@ impl Render for DownloadsPage {
         let jobs = cx.default_global::<Downloads>().jobs.lock().clone();
         let dir = store::settings_snapshot().download_dir.clone();
         let ytdlp = crate::api::streams::ytdlp_path().is_some();
+        let radius = rems(0.5 * thumbnail_corner_scale());
         let mut list = div().flex().flex_col().gap_3();
         for j in jobs.iter().rev() {
             let id = j.id;
@@ -45,9 +46,13 @@ impl Render for DownloadsPage {
                     .child(
                         div()
                             .id(SharedString::from(format!("dlt-{id}")))
+                            .flex_none()
+                            .w(px(160.))
+                            .h(px(90.))
+                            .overflow_hidden()
                             .cursor_pointer()
                             .on_click(move |_, window, cx| navigate(Route::Watch { id: vid.clone(), playlist: None, start: None }, window, cx))
-                            .child(img(SharedString::from(j.video.thumbnail.clone())).w(px(160.)).h(px(90.)).rounded_lg().object_fit(ObjectFit::Cover)),
+                            .child(img(SharedString::from(j.video.thumbnail.clone())).size_full().aspect_ratio(16. / 9.).rounded(radius).object_fit(ObjectFit::Cover)),
                     )
                     .child(
                         div()
@@ -56,12 +61,12 @@ impl Render for DownloadsPage {
                             .flex_1()
                             .min_w_0()
                             .gap_2()
-                            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).truncate().child(j.video.title.clone()))
-                            .child(div().text_xs().text_color(p.text2).child(tf!("{0}, format {1}", j.video.channel_name, j.format)))
+                            .child(selectable_text(SharedString::from(format!("dl-title-{id}")), j.video.title.clone()).text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).truncate())
+                            .child(selectable_text(SharedString::from(format!("dl-meta-{id}")), tf!("{0}, format {1}", j.video.channel_name, j.format)).text_xs().text_color(p.text2))
                             .when(running, |d| {
                                 d.child(div().w_full().h(px(4.)).rounded_full().bg(p.hover).child(div().h_full().rounded_full().w(relative(j.progress.clamp(0.0, 1.0))).bg(p.accent)))
                             })
-                            .child(div().text_xs().text_color(color).truncate().child(status)),
+                            .child(selectable_text(SharedString::from(format!("dl-status-{id}")), status).text_xs().text_color(color).truncate()),
                     )
                     .when(running, |d| d.child(pill(SharedString::from(format!("dlc-{id}")), Some("x"), "Cancel", cx).on_click(move |_, _, cx| crate::downloads::cancel(id, cx))))
                     .when_some(done_path, |d, path| {
@@ -118,7 +123,7 @@ impl Render for DownloadsPage {
                                     })),
                             ),
                     )
-                    .child(div().text_sm().text_color(p.text2).child(tf!("Saving to {0}. Engine {1}", dir, if ytdlp { t("yt-dlp (all qualities, SponsorBlock chapters)") } else { t("built-in (combined 360p/720p or audio only). Install yt-dlp for more") })))
+                    .child(selectable_text("dl-dir-info", tf!("Saving to {0}. Engine {1}", dir, if ytdlp { t("yt-dlp (all qualities, SponsorBlock chapters)") } else { t("built-in (combined 360p/720p or audio only). Install yt-dlp for more") })).text_sm().text_color(p.text2))
                     .child(list),
             ),
         )

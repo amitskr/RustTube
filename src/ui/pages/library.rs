@@ -1,10 +1,13 @@
-use crate::store;
+use crate::api::history::{Account, Entry};
 use crate::i18n::{t as translate, tf};
+use crate::store;
 use crate::ui::app::{Route, confirm, navigate, prompt_text};
 use crate::ui::cards::*;
+use crate::ui::history::{AccountHistory, Snapshot, refresh_current};
 use crate::ui::widgets::*;
 use crate::ui::*;
 use gpui_kit::component::input::{Input, InputState};
+use std::collections::HashSet;
 
 #[derive(Clone, Copy, PartialEq)]
 enum HistTab {
@@ -18,65 +21,117 @@ pub struct HistoryPage {
     scroll: ScrollHandle,
     limit: usize,
     tab: HistTab,
-    /// the signed-in account's YouTube watch history
-    yt: Option<Load<Vec<crate::api::types::VideoItem>>>,
+    account: Option<Account>,
+    snapshot: Option<Snapshot>,
+    yt: Option<Load<Vec<Entry>>>,
     yt_cont: Option<String>,
     yt_loading_more: bool,
-}
-
-fn only_videos(items: Vec<crate::api::types::Item>) -> impl Iterator<Item = crate::api::types::VideoItem> {
-    items.into_iter().filter_map(|i| if let crate::api::types::Item::Video(v) = i { Some(v) } else { None })
+    yt_loaded_more: bool,
+    yt_head: HashSet<String>,
+    yt_revision: u64,
 }
 
 impl HistoryPage {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(translate("Search history")));
         cx.observe(&filter, |_, _, cx| cx.notify()).detach();
-        let signed_in = crate::api::auth::signed_in();
+        let account = Account::current();
+        let tab = if account.is_some() { HistTab::Account } else { HistTab::Device };
         let mut s = Self {
             filter,
             scroll: ScrollHandle::new(),
             limit: 100,
-            tab: if signed_in { HistTab::Account } else { HistTab::Device },
+            tab,
+            account,
+            snapshot: None,
             yt: None,
             yt_cont: None,
             yt_loading_more: false,
+            yt_loaded_more: false,
+            yt_head: HashSet::new(),
+            yt_revision: 0,
         };
-        if signed_in {
-            crate::ui::app::sync_account_history(cx);
-            s.yt = Some(Load::Loading);
-            cx.spawn(async move |this, cx| {
-                let res = blocking(crate::api::auth::history).await;
-                let _ = this.update(cx, |t, cx| {
-                    t.yt = Some(match res {
-                        Ok(page) => {
-                            t.yt_cont = page.continuation;
-                            Load::Ready(only_videos(page.items).collect())
-                        }
-                        Err(e) => Load::Error(e.to_string()),
-                    });
-                    cx.notify();
-                });
-            })
-            .detach();
-        }
+        refresh_current(cx, true);
+        s.update_snapshot(cx);
+        cx.observe_global::<AccountHistory>(|this, cx| this.update_snapshot(cx)).detach();
         s
     }
 
+    fn update_snapshot(&mut self, cx: &mut Context<Self>) {
+        let account = Account::current();
+        let key = account.as_ref().map(Account::key);
+        if self.account.as_ref().map(Account::key) != key {
+            self.account = account;
+            self.snapshot = None;
+            self.yt_cont = None;
+            self.yt_loading_more = false;
+            self.yt_loaded_more = false;
+            self.yt_head.clear();
+            self.yt_revision += 1;
+            self.yt = None;
+            if key.is_none() && self.tab == HistTab::Account {
+                self.tab = HistTab::Device;
+            }
+        }
+        if let Some(snapshot) = cx.try_global::<AccountHistory>()
+            .filter(|state| state.account_key == key)
+            .and_then(|state| state.snapshot.clone())
+        {
+            if self.snapshot.as_ref().is_some_and(|old| std::sync::Arc::ptr_eq(old, &snapshot)) {
+                return;
+            }
+            match snapshot.as_ref() {
+                Ok(page) => {
+                    let mut entries = page.entries.clone();
+                    let head = entries.iter().map(|entry| entry.video.id.clone()).collect::<HashSet<_>>();
+                    // A refresh of the newest page should not discard older
+                    // pages or interrupt an in-flight continuation.
+                    if self.yt_loaded_more || self.yt_loading_more {
+                        if let Some(Load::Ready(existing)) = &mut self.yt {
+                            entries.extend(existing.drain(..).filter(|entry| {
+                                !self.yt_head.contains(&entry.video.id) && !head.contains(&entry.video.id)
+                            }));
+                        }
+                    } else {
+                        self.yt_revision += 1;
+                        self.yt_cont = page.continuation.clone();
+                    }
+                    self.yt_head = head;
+                    self.yt = Some(Load::Ready(entries));
+                }
+                Err(error) if !matches!(self.yt, Some(Load::Ready(_))) => self.yt = Some(Load::Error(error.clone())),
+                Err(_) => {}
+            }
+            self.snapshot = Some(snapshot);
+        } else if self.yt.is_none() && key.is_some() {
+            self.yt = Some(Load::Loading);
+        }
+        cx.notify();
+    }
+
     fn load_more_yt(&mut self, cx: &mut Context<Self>) {
+        let Some(account) = self.account.clone() else {
+            self.yt_loading_more = false;
+            return;
+        };
         let Some(tok) = self.yt_cont.take() else {
             self.yt_loading_more = false;
             return;
         };
+        let revision = self.yt_revision;
         cx.spawn(async move |this, cx| {
-            let res = blocking(move || crate::api::auth::browse_continue(&tok)).await;
+            let res = blocking(move || account.page(Some(&tok))).await;
             let _ = this.update(cx, |t, cx| {
+                if t.yt_revision != revision {
+                    return;
+                }
                 t.yt_loading_more = false;
                 if let Ok(page) = res {
                     t.yt_cont = page.continuation;
+                    t.yt_loaded_more = true;
                     if let Some(Load::Ready(list)) = &mut t.yt {
-                        let seen: std::collections::HashSet<String> = list.iter().map(|v| v.id.clone()).collect();
-                        list.extend(only_videos(page.items).filter(|v| !seen.contains(&v.id)));
+                        let seen: HashSet<String> = list.iter().map(|entry| entry.video.id.clone()).collect();
+                        list.extend(page.entries.into_iter().filter(|entry| !seen.contains(&entry.video.id)));
                     }
                 }
                 cx.notify();
@@ -88,7 +143,7 @@ impl HistoryPage {
     fn account_list(&mut self, q: &str, cx: &mut Context<Self>) -> Div {
         let mut list = div().flex().flex_col().gap_4().flex_1().min_w_0();
         let has_more = self.yt_cont.is_some();
-        let shown: Vec<crate::api::types::VideoItem> = match &self.yt {
+        let shown: Vec<&Entry> = match &self.yt {
             None => return list.child(empty_state("history", "Sign in to see your YouTube watch history", "", cx)),
             Some(Load::Loading) => return list.child(loading_row(cx)),
             Some(Load::Error(e)) => {
@@ -97,13 +152,17 @@ impl HistoryPage {
             }
             Some(Load::Ready(videos)) => {
                 let ql = q.to_lowercase();
-                videos.iter().filter(|v| ql.is_empty() || v.title.to_lowercase().contains(&ql) || v.channel_name.to_lowercase().contains(&ql)).cloned().collect()
+                videos.iter().filter(|entry| {
+                    let v = &entry.video;
+                    ql.is_empty() || v.title.to_lowercase().contains(&ql) || v.channel_name.to_lowercase().contains(&ql)
+                }).collect()
             }
         };
         if shown.is_empty() {
             list = list.child(empty_state("history", if q.is_empty() { "Your YouTube watch history is empty" } else { "No matches" }, "", cx));
         }
-        for v in &shown {
+        for entry in shown {
+            let v = &entry.video;
             let id = v.id.clone();
             list = list.child(
                 div()
@@ -111,10 +170,12 @@ impl HistoryPage {
                     .items_start()
                     .gap_2()
                     .child(div().flex_1().min_w_0().child(video_row(v, px(246.), cx)))
-                    .child(icon_button(SharedString::from(format!("yhx-{}", v.id)), "x", cx).on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.remove_account_entry(id.clone(), cx);
-                    }))),
+                    .when(entry.removal_token.is_some(), |d| {
+                        d.child(icon_button(SharedString::from(format!("yhx-{}", v.id)), "x", cx).on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.remove_account_entry(id.clone(), cx);
+                        })))
+                    }),
             );
         }
         if has_more {
@@ -123,22 +184,40 @@ impl HistoryPage {
         list
     }
 
-    /// Removes an entry from the YouTube history (and this device's), restoring it if that fails.
+    /// Removes an entry in the same account that supplied its feedback token.
     fn remove_account_entry(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(account) = self.account.clone() else { return };
         let Some(Load::Ready(list)) = &mut self.yt else { return };
-        let Some(pos) = list.iter().position(|v| v.id == id) else { return };
+        let Some(pos) = list.iter().position(|entry| entry.video.id == id) else { return };
+        let Some(token) = list[pos].removal_token.clone() else { return };
         let removed = list.remove(pos);
-        store::history_remove(&id);
-        cx.default_global::<Watched>().0.remove(&id);
+        let key = account.key();
+        let revision = self.yt_revision;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let id2 = id.clone();
-            let res = blocking(move || crate::api::auth::remove_from_history(&id2)).await;
+            let res = blocking(move || account.remove(&id2, &token)).await;
+            if res.is_ok() {
+                let _ = cx.update(|cx| {
+                    cx.default_global::<Watched>().0.remove(&id);
+                    crate::ui::app::refresh_all_pages(cx);
+                });
+            }
             let _ = this.update(cx, |t, cx| match res {
-                Ok(()) => toast(cx, translate("Removed from watch history")),
+                Ok(()) => {
+                    if t.account.as_ref().map(Account::key) == Some(key) {
+                        if let Some(Load::Ready(list)) = &mut t.yt {
+                            list.retain(|entry| entry.video.id != id);
+                        }
+                    }
+                    toast(cx, translate("Removed from watch history"));
+                    cx.notify();
+                }
                 Err(e) => {
-                    if let Some(Load::Ready(list)) = &mut t.yt {
-                        list.insert(pos.min(list.len()), removed);
+                    if t.yt_revision == revision {
+                        if let Some(Load::Ready(list)) = &mut t.yt {
+                            list.insert(pos.min(list.len()), removed);
+                        }
                     }
                     toast(cx, tf!("Couldn't remove it from YouTube: {0}", crate::ui::friendly_error(&e.to_string())));
                     cx.notify();
@@ -205,7 +284,7 @@ impl Render for HistoryPage {
             }
         }
         let width = content_width(cx).min(px(1100.));
-        let signed_in = crate::api::auth::signed_in();
+        let signed_in = self.account.is_some();
         let mut tabs = div().flex().gap_2();
         let tab_defs: Vec<(HistTab, &str)> = if signed_in {
             vec![(HistTab::Account, "YouTube history"), (HistTab::Device, "On this device"), (HistTab::Searches, "Searches")]
@@ -215,6 +294,9 @@ impl Render for HistoryPage {
         for (t, label) in tab_defs {
             tabs = tabs.child(chip(SharedString::from(format!("ht-{label}")), translate(label), self.tab == t, cx).on_click(cx.listener(move |this, _, _, cx| {
                 this.tab = t;
+                if t == HistTab::Account {
+                    refresh_current(cx, true);
+                }
                 cx.notify();
             })));
         }

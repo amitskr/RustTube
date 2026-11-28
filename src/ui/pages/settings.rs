@@ -70,6 +70,7 @@ impl SettingsPage {
             ("proxy", s.proxy.clone(), "e.g. socks5://127.0.0.1:9050 or http://host:port", |s, v| s.proxy = v),
             ("external", s.external_player.clone(), "Automatic", |s, v| s.external_player = v),
             ("download_dir", s.download_dir.clone(), "Download folder", |s, v| s.download_dir = v),
+            ("download_name", s.download_name.clone(), "{title} [{id}]", |s, v| s.download_name = v),
             ("captions_lang", s.captions_lang.clone(), "en", |s, v| s.captions_lang = v),
             ("sb_min", format!("{}", s.sb_min_duration), "0", |s, v| s.sb_min_duration = v.parse().unwrap_or(0.0)),
             ("sb_user_id", s.sb_user_id.clone(), "Paste your private user ID", |s, v| s.sb_user_id = v),
@@ -211,17 +212,7 @@ thread_local! {
     static QUERY: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
 }
 
-const CAPTION_COLORS: &[(u32, &str)] = &[
-    (0xFFFFFF, "White"),
-    (0xFFFF00, "Yellow"),
-    (0x00FF00, "Green"),
-    (0x00FFFF, "Cyan"),
-    (0x0000FF, "Blue"),
-    (0xFF00FF, "Magenta"),
-    (0xFF0000, "Red"),
-    (0x000000, "Black"),
-];
-const OPACITIES: &[(u32, &str)] = &[(25, "25%"), (50, "50%"), (75, "75%"), (100, "100%")];
+use crate::player::controller::{CAPTION_COLORS, CAPTION_EDGES, CAPTION_FONTS, CAPTION_OPACITIES as OPACITIES, CAPTION_SIZES};
 
 /// How captions will look with the current settings, over a stand-in for video.
 fn caption_preview(s: &Settings) -> AnyElement {
@@ -268,11 +259,22 @@ fn settings_search_text(text: &str) -> String {
     text.replace(['İ', 'ı'], "i").to_lowercase()
 }
 
+thread_local! {
+    /// rows that matched the settings search in the section being drawn
+    static HITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn matches_settings_search(labels: &[&str]) -> bool {
     QUERY.with(|query| {
         let query = query.borrow();
-        query.is_empty()
-            || labels.iter().any(|label| settings_search_text(label).contains(query.as_str()))
+        if query.is_empty() {
+            return true;
+        }
+        let hit = labels.iter().any(|label| settings_search_text(label).contains(query.as_str()));
+        if hit {
+            HITS.with(|h| h.set(h.get() + 1));
+        }
+        hit
     })
 }
 
@@ -438,7 +440,7 @@ impl SettingsPage {
             };
             (name.to_string(), credit.to_string(), selected, language)
         }).collect();
-        self.select("app-language", label, 280., items, |s, v| s.app_language = v, cx)
+        self.select("app-language", label, 280., items, set_app_language, cx)
     }
 
     /// A dropdown button: `items` are (label, detail, active, value).
@@ -563,6 +565,12 @@ impl SettingsPage {
         card(cx)
             .children(note)
             .child(row("Background play", "Keep playing when the window is minimized (off: pause, resume on restore)", switch("bgp", s.background_play, |s, v| s.background_play = v, cx), cx))
+            .child(row(
+                "Independent tab playback",
+                "Play up to three tabs at once. Restart RustTube to apply.",
+                switch("independent-tab-playback", s.independent_tab_playback, |s, v| s.independent_tab_playback = v, cx),
+                cx,
+            ))
             .child(row("Most replayed graph", "Heat line above the seek bar", switch("heat", s.show_heatmap, |s, v| s.show_heatmap = v, cx), cx))
             .child(row("Jump ahead", "Button to skip to the most replayed part", switch("jump", s.jump_ahead, |s, v| s.jump_ahead = v, cx), cx))
             .child(row("Enhanced bitrate", "Picks the highest-bitrate stream YouTube offers for the chosen quality", switch("ebr", s.enhanced_bitrate, |s, v| s.enhanced_bitrate = v, cx), cx))
@@ -580,6 +588,18 @@ impl SettingsPage {
         let s = store::settings_snapshot();
         card(cx)
             .child(row("Shorts: play next automatically", "Move to the next Short when one ends", switch("sha", s.shorts_autoadvance, |s, v| s.shorts_autoadvance = v, cx), cx))
+            .child(row(
+                "Preload upcoming Shorts",
+                "Buffer the start of this many videos ahead of playback",
+                self.choice(
+                    "shorts-preload",
+                    &[(0, "Off"), (1, "1"), (2, "2"), (3, "3"), (4, "4"), (5, "5")],
+                    s.shorts_preload.min(crate::player::shorts_preload::MAX_AHEAD),
+                    |s, v| s.shorts_preload = v,
+                    cx,
+                ),
+                cx,
+            ))
             .child(row("Open Shorts in the regular player", "", switch("shp", s.shorts_in_player, |s, v| s.shorts_in_player = v, cx), cx))
             .child(row(
                 "YouTube-style Shorts layout",
@@ -625,8 +645,12 @@ impl SettingsPage {
                         tf!("Connected as {0}. Videos you watch here show in your YouTube history and resume where you stopped on your other devices", name),
                         pill("web-out", Some("unlink"), "Disconnect", cx).on_click(|_, _, cx| crate::ui::app::disconnect_web(cx)),
                     ),
+                    None if crate::api::auth::signed_in() => (
+                        "Your YouTube sign-in already does this: videos you watch here show in your YouTube history and resume on your phone. A browser session is a fallback for when that stops working".to_string(),
+                        pill("web-in", Some("history"), "Connect", cx).on_click(|_, _, cx| crate::ui::app::open_web_sign_in(cx)),
+                    ),
                     None => (
-                        "Sign in through your browser so videos you watch here show in your YouTube history and resume on your phone".to_string(),
+                        "Sign in through your browser so videos you watch here show in your YouTube history and resume on your phone. It also plays age-restricted videos and ones YouTube shows a bot check for".to_string(),
                         pill("web-in", Some("history"), "Connect", cx).on_click(|_, _, cx| crate::ui::app::open_web_sign_in(cx)),
                     ),
                 };
@@ -641,6 +665,35 @@ impl SettingsPage {
             .child(row("Theme", "", self.choice("theme", &[("dark".to_string(), "Dark"), ("light".to_string(), "Light"), ("system".to_string(), "System")], s.theme.clone(), |s, v| s.theme = v, cx), cx))
             .child(row("Accent color", "Switches, highlights, progress and the seek bar", accent_swatches(s.accent, cx), cx))
             .child(row("Start page", "", self.choice("start", &[("home".to_string(), "Home"), ("subscriptions".to_string(), "Subscriptions"), ("history".to_string(), "History")], s.start_page.clone(), |s, v| s.start_page = v, cx), cx))
+            .child(row(
+                "Cast over LAN",
+                crate::lan_cast::url(cx).unwrap_or("Send a YouTube link from your phone"),
+                if let Some(url) = crate::lan_cast::url(cx).map(str::to_owned) {
+                    div().flex().gap_2()
+                        .child(pill("cast-copy", Some("copy"), "Copy link", cx).on_click(move |_, _, cx| copy_to_clipboard(url.clone(), cx)))
+                        .child(pill("cast-stop", None, "Stop", cx).on_click(|_, _, cx| crate::lan_cast::stop(cx)))
+                } else {
+                    div().child(pill("cast-start", Some("play"), "Start", cx).on_click(|event, window, cx| {
+                        let launch = |address, window: &mut Window, cx: &mut App| {
+                            if crate::lan_cast::start(address, window.window_handle(), cx).is_err() {
+                                toast(cx, t("Couldn't connect to the local network"));
+                            }
+                        };
+                        let addresses = crate::lan_cast::addresses().unwrap_or_default();
+                        match addresses.as_slice() {
+                            [] => toast(cx, t("Couldn't connect to the local network")),
+                            [address] => launch(*address, window, cx),
+                            _ => {
+                                let choices = addresses.into_iter().map(|address| {
+                                    crate::ui::app::MenuItem::new("network", address.to_string(), move |window, cx| launch(address, window, cx))
+                                }).collect();
+                                crate::ui::app::open_menu(event.position(), choices, window, cx);
+                            }
+                        }
+                    }))
+                },
+                cx,
+            ))
             .child(row("Interface size", "", self.choice("scale", &[(0.9f32, "90%"), (1.0, "100%"), (1.1, "110%"), (1.25, "125%")], s.ui_scale, |s, v| s.ui_scale = v, cx), cx))
             .child(row(
                 "Always show scrollbars",
@@ -648,27 +701,60 @@ impl SettingsPage {
                 switch("sbar", s.always_scrollbars, |s, v| s.always_scrollbars = v, cx),
                 cx,
             ))
+            .child(row(
+                "Always show tab bar",
+                "Keep the tab bar visible even when only one tab is open",
+                switch("tbar", s.always_show_tab_bar, |s, v| s.always_show_tab_bar = v, cx),
+                cx,
+            ))
+            .when(cfg!(windows), |card| card.child(row(
+                "Minimize to tray",
+                "Keep RustTube open in the Windows notification area when you minimize or close it",
+                switch("minimize-to-tray", s.minimize_to_tray, |s, v| s.minimize_to_tray = v, cx),
+                cx,
+            )))
             .child(row("Density", "", self.choice("density", &[("compact".to_string(), "Compact"), ("default".to_string(), "Default"), ("comfortable".to_string(), "Comfortable")], s.density.clone(), |s, v| s.density = v, cx), cx))
             .child(row("Thumbnail corners", "", self.choice("radius", &[(0.0f32, "Square"), (6.0, "Small"), (12.0, "Rounded"), (18.0, "Large")], s.thumb_radius, |s, v| s.thumb_radius = v, cx), cx))
+            .child(row("Up next thumbnail size", "", self.choice("up-next-thumbnail-size", store::UP_NEXT_THUMBNAIL_SIZES, s.up_next_thumbnail_width, |s, v| s.up_next_thumbnail_width = v, cx), cx))
             .child(row("Grid columns", "", self.choice("cols", &[(0u32, "Auto"), (3, "3"), (4, "4"), (5, "5"), (6, "6")], s.grid_columns, |s, v| s.grid_columns = v, cx), cx))
             .child(row("Play videos on hover", "Muted preview when the pointer rests on a thumbnail", switch("hovp", s.hover_preview, |s, v| s.hover_preview = v, cx), cx))
             .child(row("Region", "Trending, Explore and search results", self.dropdown("dd-region", crate::locale::REGIONS, s.region.clone(), |s, v| s.region = v, cx), cx))
             .child(row("YouTube language", "Titles, dates and YouTube's text", self.dropdown("dd-lang", crate::locale::LANGUAGES, s.language.clone(), |s, v| s.language = v, cx), cx))
+            .child(row(
+                "Original video titles",
+                "Use the creator's title when you open a video",
+                switch("original-video-titles", s.original_video_titles, |s, v| s.original_video_titles = v, cx),
+                cx,
+            ))
     }
 
     fn player(&self, cx: &mut Context<Self>) -> Div {
         let s = store::settings_snapshot();
         card(cx)
+            .child(row("Theater mode", "Use the wider player layout when opening a video", switch("theater-mode", s.theater_mode, |s, v| s.theater_mode = v, cx), cx))
             .child(row(
-                "Theater mode",
-                "Use the wider player layout when opening a video",
-                switch("theater-mode", s.theater_mode, |s, v| s.theater_mode = v, cx),
+                "Full-height theater mode",
+                "Fit the video in the space below the top bar and tabs.",
+                switch("theater-full-height", s.theater_full_height, |s, v| s.theater_full_height = v, cx),
                 cx,
             ))
+            .child(row(
+                "Picture-in-picture above other apps",
+                "",
+                switch("pip-always-on-top", s.pip_always_on_top, |s, v| s.pip_always_on_top = v, cx),
+                cx,
+            ))
+            .child(row("Show video title in player", "Display the title in the upper-left corner of the player", switch("spt", s.show_player_title, |s, v| s.show_player_title = v, cx), cx))
             .child(row(
                 "Default quality",
                 "Maximum resolution to start videos at",
                 self.choice("q", &[(2160u32, "4K"), (1440, "1440p"), (1080, "1080p"), (720, "720p"), (480, "480p"), (360, "360p")], s.default_quality, |s, v| s.default_quality = v, cx),
+                cx,
+            ))
+            .child(row(
+                "Aspect ratio",
+                "Crop the black bars of letterboxed films to fill an ultrawide screen, or zoom the picture. Z changes it while watching",
+                self.choice("aspect", &crate::player::aspect::MODES.iter().map(|&(v, l)| (v.to_string(), l)).collect::<Vec<_>>(), s.aspect_mode.clone(), |s, v| s.aspect_mode = v, cx),
                 cx,
             ))
             .child(row("Preferred codec", "", self.choice("codec", &[("vp9".to_string(), "VP9"), ("av1".to_string(), "AV1"), ("h264".to_string(), "H.264")], s.codec_pref.clone(), |s, v| s.codec_pref = v, cx), cx))
@@ -681,11 +767,11 @@ impl SettingsPage {
             .child(row("Hardware decoding", "Takes effect after restart", switch("hw", s.hwdec, |s, v| s.hwdec = v, cx), cx))
             .child(row("Captions on by default", "", switch("cc", s.captions_enabled, |s, v| s.captions_enabled = v, cx), cx))
             .child(row("Caption language", "Preferred subtitle track", self.dropdown("dd-cap", crate::locale::CAPTION_LANGUAGES, s.captions_lang.clone(), |s, v| s.captions_lang = v, cx), cx))
-            .child(row("Caption size", "", self.choice("capsize", &[(30u32, "Small"), (40, "Medium"), (52, "Large"), (64, "Extra large")], s.caption_size, |s, v| s.caption_size = v, cx), cx))
+            .child(row("Caption size", "", self.choice("capsize", CAPTION_SIZES, s.caption_size, |s, v| s.caption_size = v, cx), cx))
             .child(row(
                 "Caption font",
                 "",
-                self.choice("capfont", &[("sans".to_string(), "Sans-serif"), ("serif".to_string(), "Serif"), ("mono".to_string(), "Monospace"), ("casual".to_string(), "Casual")], s.caption_font.clone(), |s, v| s.caption_font = v, cx),
+                self.choice("capfont", &CAPTION_FONTS.iter().map(|&(v, l)| (v.to_string(), l)).collect::<Vec<_>>(), s.caption_font.clone(), |s, v| s.caption_font = v, cx),
                 cx,
             ))
             .child(row("Caption color", "", self.choice("capcolor", CAPTION_COLORS, s.caption_color, |s, v| s.caption_color = v, cx), cx))
@@ -701,7 +787,7 @@ impl SettingsPage {
                     "Around the text when there's no background",
                     self.choice(
                         "capedge",
-                        &[("outline-shadow".to_string(), "Outline and shadow"), ("outline".to_string(), "Outline"), ("shadow".to_string(), "Drop shadow"), ("none".to_string(), "None")],
+                        &CAPTION_EDGES.iter().map(|&(v, l)| (v.to_string(), l)).collect::<Vec<_>>(),
                         s.caption_edge.clone(),
                         |s, v| s.caption_edge = v,
                         cx,
@@ -922,6 +1008,24 @@ impl SettingsPage {
                     })),
             );
         }
+        let mut hidden = div().flex().flex_col();
+        for (id, title) in s.hidden_videos.iter() {
+            let id2 = id.clone();
+            hidden = hidden.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .py_1()
+                    .child(div().min_w_0().flex_1().truncate().text_sm().child(title.clone()))
+                    .child(pill(SharedString::from(format!("unh-{id}")), None, "Unhide", cx).on_click(move |_, _, cx| {
+                        let i = id2.clone();
+                        store::update_settings(|s| s.hidden_videos.retain(|(v, _)| *v != i));
+                        cx.refresh_windows();
+                    })),
+            );
+        }
         div()
             .flex()
             .flex_col()
@@ -935,6 +1039,7 @@ impl SettingsPage {
                     .child(row("Hide related videos", "", switch("hr", s.hide_related, |s, v| s.hide_related = v, cx), cx))
                     .child(row("Hide description", "", switch("hd", s.hide_description, |s, v| s.hide_description = v, cx), cx))
                     .child(row("Hide view counts", "", switch("hv", s.hide_view_counts, |s, v| s.hide_view_counts = v, cx), cx))
+                    .child(row("Hide subscriber counts", "", switch("hsc", s.hide_subscriber_counts, |s, v| s.hide_subscriber_counts = v, cx), cx))
                     .child(row("Hide channel avatars", "", switch("ha", s.hide_channel_avatars, |s, v| s.hide_channel_avatars = v, cx), cx))
                     .child(row("Hide chapters", "", switch("hch", s.hide_chapters, |s, v| s.hide_chapters = v, cx), cx))
                     .child(row("Hide Explore / trending", "", switch("he", s.hide_explore, |s, v| s.hide_explore = v, cx), cx))
@@ -950,6 +1055,11 @@ impl SettingsPage {
                     .child(row("Blocked channels", "", div(), cx))
                     .child(div().py_2().child(if s.blocked_channels.is_empty() { div().text_xs().text_color(p.text2).child(t("None")).into_any_element() } else { chans.into_any_element() })),
             )
+            .child(
+                card(cx)
+                    .child(row("Hidden videos", "", div(), cx))
+                    .child(div().py_2().child(if s.hidden_videos.is_empty() { div().text_xs().text_color(p.text2).child(t("None")).into_any_element() } else { hidden.into_any_element() })),
+            )
     }
 
     fn subscriptions(&self, cx: &mut Context<Self>) -> Div {
@@ -963,6 +1073,7 @@ impl SettingsPage {
             ))
             .child(row("Include Shorts in feed", "Extra request per channel", switch("fis", s.feed_include_shorts, |s, v| s.feed_include_shorts = v, cx), cx))
             .child(row("Include live streams in feed", "", switch("fil", s.feed_include_live, |s, v| s.feed_include_live = v, cx), cx))
+            .child(row("Group videos by day", "", switch("fgd", s.feed_group_by_day, |s, v| s.feed_group_by_day = v, cx), cx))
     }
 
     fn privacy(&self, cx: &mut Context<Self>) -> Div {
@@ -991,6 +1102,7 @@ impl SettingsPage {
                     "sb2",
                     &[
                         ("auto".to_string(), "Auto (recommended)"),
+                        ("tv".to_string(), "TV (plays with your sign-in)"),
                         ("visionos".to_string(), "visionOS"),
                         ("android_vr".to_string(), "Android VR"),
                         ("ytdlp".to_string(), "yt-dlp"),
@@ -1050,6 +1162,7 @@ impl SettingsPage {
         let s = store::settings_snapshot();
         card(cx)
             .child(row("Download folder", "", text_field(&self.input("download_dir"), 360., cx), cx))
+            .child(row("File name", "Use {title}, {channel} and {id}. Leave empty for the default", text_field(&self.input("download_name"), 360., cx), cx))
             .child(row(
                 "Default format",
                 "",
@@ -1280,8 +1393,18 @@ impl Render for SettingsPage {
         if !query.is_empty() {
             // search: matching rows from every section
             let mut all = div().flex().flex_col().gap_4();
+            let mut any = false;
             for (sec, name, _) in SECTIONS {
-                all = all.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text2).child(t(name).to_uppercase())).child(render_section(self, *sec, cx));
+                // only the sections with a matching row (an empty card read as a broken page)
+                HITS.with(|h| h.set(0));
+                let section = render_section(self, *sec, cx);
+                if HITS.with(|h| h.get()) > 0 {
+                    any = true;
+                    all = all.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text2).child(t(name).to_uppercase())).child(section);
+                }
+            }
+            if !any {
+                all = all.child(div().text_sm().text_color(p.text2).child(t("No settings match your search")));
             }
             QUERY.with(|q| q.borrow_mut().clear());
             return page_scroll("settings-scroll", &self.scroll).child(
@@ -1346,5 +1469,36 @@ mod tests {
     fn settings_search_accepts_dotted_and_dotless_i() {
         assert_eq!(settings_search_text("İzleme"), "izleme");
         assert_eq!(settings_search_text("AYARI"), settings_search_text("ayarı"));
+    }
+}
+
+/// Changes the app language. The YouTube and caption languages follow it while
+/// they still match the previous app language, so a separate choice is kept (#122).
+fn set_app_language(s: &mut Settings, language: AppLanguage) {
+    let old = s.app_language.code();
+    if s.language.eq_ignore_ascii_case(old) {
+        s.language = language.code().to_string();
+    }
+    if s.captions_lang.eq_ignore_ascii_case(old) {
+        s.captions_lang = language.code().to_string();
+    }
+    s.app_language = language;
+}
+
+#[cfg(test)]
+mod app_language_tests {
+    use super::{AppLanguage, Settings, set_app_language};
+
+    #[test]
+    fn youtube_and_caption_languages_follow_unless_chosen_separately() {
+        let mut s = Settings::default();
+        set_app_language(&mut s, AppLanguage::Russian);
+        assert_eq!((s.language.as_str(), s.captions_lang.as_str()), ("ru", "ru"));
+
+        // captions set to something else on purpose stay as they are
+        s.captions_lang = "ja".into();
+        set_app_language(&mut s, AppLanguage::German);
+        assert_eq!((s.language.as_str(), s.captions_lang.as_str()), ("de", "ja"));
+        assert_eq!(s.app_language, AppLanguage::German);
     }
 }

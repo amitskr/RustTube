@@ -4,6 +4,8 @@ use crate::i18n::{t, tf};
 use crate::api::types::*;
 use crate::store;
 use crate::ui::app::{MenuItem, Route, navigate, open_in_new_tab, open_menu};
+use crate::ui::widgets::has_text_selection;
+use gpui_kit::component::tooltip::Tooltip;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -119,39 +121,71 @@ fn badge(v: &VideoItem, cx: &App) -> Option<AnyElement> {
 pub fn thumbnail(v: &VideoItem, url: String, w: Pixels, h: Pixels, radius: Pixels, cx: &App) -> Div {
     let p = pal(cx);
     let progress = watched_progress(&v.id, cx);
+    let radius = radius * thumbnail_corner_scale();
     div()
         .relative()
         .w(w)
         .h(h)
         .flex_none()
-        .rounded(radius * (store::settings_snapshot().thumb_radius / 12.0))
+        .rounded(radius)
         .overflow_hidden()
         .bg(p.surface)
         // the card's ratio: otherwise the image's own (4:3 for letterboxed
         // sddefault/hqdefault) wins over the size, the image ends up taller than
         // the card and shows top-aligned with the bottom cut off
-        .child(img(SharedString::from(url)).size_full().aspect_ratio(w / h).object_fit(ObjectFit::Cover))
+        // overflow_hidden clips to a rectangle, so the image rounds its own corners
+        .child(img(SharedString::from(url)).size_full().rounded(radius).aspect_ratio(w / h).object_fit(ObjectFit::Cover))
         .child(crate::player::preview::slot_marker(&v.id, cx))
         .children(badge(v, cx))
         .when_some(progress.filter(|p| *p > 0.01), |d, pr| {
             d.child(
+                // a rectangle would stick out past the rounded bottom corners, so the bar
+                // stops short of them
                 div()
                     .absolute()
                     .bottom_0()
-                    .left_0()
-                    .w_full()
+                    .left(radius * 0.5)
+                    .right(radius * 0.5)
                     .h(px(4.))
+                    .rounded_full()
+                    .overflow_hidden()
                     .bg(hsla(0., 0., 0.6, 0.6))
-                    .child(div().h_full().w(relative(pr)).bg(p.accent)),
+                    .child(div().h_full().w(relative(pr)).rounded_full().bg(p.accent)),
             )
         })
 }
 
+pub fn download_menu_items(video: &VideoItem, anchor: Point<Pixels>) -> Vec<MenuItem> {
+    let mut items: Vec<_> = crate::downloads::FORMATS
+        .iter()
+        .map(|&(format, label)| {
+            let video = video.clone();
+            let icon = if format == "audio" { "music" } else { "film" };
+            MenuItem::new(icon, t(label), move |_, cx| {
+                crate::downloads::start(video.clone(), Some(format.into()), cx);
+            })
+        })
+        .collect();
+    for &(format, label) in crate::downloads::TRANSCRIPTS {
+        let video = video.clone();
+        items.push(MenuItem::new("captions", t(label), move |window, cx| {
+            super::transcript_menu::open_picker(anchor, &video, format, window, cx);
+        }));
+    }
+    items
+}
+
 pub fn video_menu_items(v: &VideoItem) -> Vec<MenuItem> {
+    video_menu_items_with(v, true)
+}
+
+fn video_menu_items_with(v: &VideoItem, save_to_watch_later: bool) -> Vec<MenuItem> {
+    // youtube.com's items in its order, then the app's own
     let mut items = Vec::new();
+    let mut extras = Vec::new();
     {
-        let route = if v.is_short { Route::Shorts(Some(v.id.clone())) } else { Route::Watch { id: v.id.clone(), playlist: None, start: None } };
-        items.push(MenuItem::new("app-window", t("Open in new tab"), move |window, cx| {
+        let route = if v.is_short { Route::Shorts(Some(v.id.clone())) } else { watch_route(v) };
+        extras.push(MenuItem::new("app-window", t("Open in new tab"), move |window, cx| {
             crate::ui::app::open_in_new_tab(route.clone(), false, window, cx)
         }));
     }
@@ -161,12 +195,28 @@ pub fn video_menu_items(v: &VideoItem) -> Vec<MenuItem> {
         toast(cx, t("Added to queue"));
     }));
     let v2 = v.clone();
-    items.push(MenuItem::new("clock", t("Save to Watch later"), move |_, cx| {
-        if let Some(wl) = store::playlists().into_iter().find(|p| p.protected && p.name == "Watch later") {
-            store::playlist_add(wl.id, &v2);
-            toast(cx, t("Saved to Watch later"));
-        }
-    }));
+    if save_to_watch_later {
+        items.push(MenuItem::new("clock", t("Save to Watch later"), move |_, cx| {
+            let local = store::playlists().into_iter().find(|p| p.protected && p.name == "Watch later");
+            if let Some(wl) = &local {
+                store::playlist_add(wl.id, &v2);
+            }
+            if let Some(session) = crate::api::auth::session_identity() {
+                let id = v2.id.clone();
+                let saved_locally = local.is_some();
+                cx.spawn(async move |cx| {
+                    let result = blocking(move || crate::api::auth::set_account_playlist_saved(&session, "WL", &id, true)).await;
+                    let _ = cx.update(|cx| match result {
+                        Ok(()) => toast(cx, t("Saved to Watch later")),
+                        Err(_) if saved_locally => toast(cx, t("Saved locally. Couldn't save to YouTube Watch later")),
+                        Err(_) => toast(cx, t("Couldn't save to that YouTube playlist")),
+                    });
+                }).detach();
+            } else if local.is_some() {
+                toast(cx, t("Saved to Watch later"));
+            }
+        }));
+    }
     let v3 = v.clone();
     items.push(MenuItem::new("bookmark", t("Save to playlist…"), move |window, cx| {
         crate::ui::app::open_save_dialog(v3.clone(), window, cx);
@@ -176,16 +226,38 @@ pub fn video_menu_items(v: &VideoItem) -> Vec<MenuItem> {
         crate::downloads::start(v4.clone(), None, cx);
     }));
     let v5 = v.clone();
-    items.push(MenuItem::new("external-link", t("Open in external player"), move |_, cx| {
+    extras.push(MenuItem::new("external-link", t("Open in external player"), move |_, cx| {
         crate::downloads::open_external(&v5.id, cx);
     }));
+    let title_copy = if store::settings_snapshot().dearrow_titles {
+        crate::api::services::branding_cached(&v.id).flatten().and_then(|b| b.title).unwrap_or_else(|| v.title.clone())
+    } else {
+        v.title.clone()
+    };
+    if !title_copy.is_empty() {
+        extras.push(MenuItem::new("copy", t("Copy title"), move |_, cx| {
+            copy_text_to_clipboard(title_copy.clone(), cx);
+        }));
+    }
     let id = v.id.clone();
     items.push(MenuItem::new("link", t("Copy link"), move |_, cx| {
         copy_to_clipboard(format!("https://www.youtube.com/watch?v={id}"), cx);
     }));
     let id2 = v.id.clone();
-    items.push(MenuItem::new("globe", t("Open on YouTube"), move |_, _| {
+    extras.push(MenuItem::new("globe", t("Open on YouTube"), move |_, _| {
         let _ = open::that(format!("https://www.youtube.com/watch?v={id2}"));
+    }));
+    let hid_id = v.id.clone();
+    let hid_title = v.title.clone();
+    items.push(MenuItem::new("eye-off", t("Not interested"), move |_, cx| {
+        let (id, title) = (hid_id.clone(), hid_title.clone());
+        store::update_settings(|s| {
+            if !s.hidden_videos.iter().any(|(i, _)| *i == id) {
+                s.hidden_videos.push((id, title));
+            }
+        });
+        toast(cx, t("Video hidden. Manage in Settings → Content filters"));
+        cx.refresh_windows();
     }));
     if let Some(cid) = v.channel_id.clone() {
         let name = v.channel_name.clone();
@@ -208,6 +280,7 @@ pub fn video_menu_items(v: &VideoItem) -> Vec<MenuItem> {
             cx.refresh_windows();
         }));
     }
+    items.extend(extras);
     items
 }
 
@@ -216,6 +289,69 @@ fn is_watched_in_history(id: &str) -> bool {
 }
 
 fn more_button(id: SharedString, v: &VideoItem, cx: &App) -> Stateful<Div> {
+    more_button_with(id, v, MenuExtra::default(), cx)
+}
+
+/// Extra items for a card's menu.
+#[derive(Clone, Default)]
+pub struct MenuExtra {
+    pub items: Vec<MenuItem>,
+    /// the card is in Watch later: the items take the place of "Save to Watch later"
+    pub replaces_watch_later: bool,
+}
+
+impl From<Vec<MenuItem>> for MenuExtra {
+    fn from(items: Vec<MenuItem>) -> Self {
+        Self { items, replaces_watch_later: false }
+    }
+}
+
+/// The video's menu; `extra` items go in after "Save to playlist…", or where
+/// "Save to Watch later" would be.
+fn menu_with(v: &VideoItem, extra: &MenuExtra) -> Vec<MenuItem> {
+    let mut items = video_menu_items_with(v, !extra.replaces_watch_later);
+    let at = items.len().min(if extra.replaces_watch_later { 2 } else { 4 });
+    items.splice(at..at, extra.items.iter().cloned());
+    items
+}
+
+/// A right click on a card opens the same menu as its three-dots button.
+fn right_click_menu(v: &VideoItem, extra: MenuExtra) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+    let v = v.clone();
+    move |ev, window, cx| {
+        cx.stop_propagation();
+        let selected = gpui_kit::base::TextSelection::selected_text(window, cx).trim().to_string();
+        let mut items = Vec::new();
+        if !selected.is_empty() {
+            items.push(MenuItem::new("copy", t("Copy"), move |_, cx| {
+                copy_text_to_clipboard(selected.clone(), cx);
+            }));
+        }
+        items.extend(menu_with(&v, &extra));
+        open_menu(ev.position, items, window, cx);
+    }
+}
+
+/// The lighter rounded background that appears behind a card under the pointer. It
+/// reaches past the card's edges so the thumbnail isn't flush with it, as on YouTube.
+fn hover_backdrop(cx: &App) -> impl IntoElement {
+    let p = pal(cx);
+    div()
+        .id("card-hover")
+        .absolute()
+        .top(px(-8.))
+        .bottom(px(-8.))
+        .left(px(-8.))
+        .right(px(-8.))
+        .rounded_xl()
+        .bg(p.surface)
+        .invisible()
+        .group_hover("card", |s| s.visible())
+}
+
+/// The three-dots button, shown while the pointer is over its card; `extra` items go
+/// into the menu after "Save to playlist…".
+fn more_button_with(id: SharedString, v: &VideoItem, extra: MenuExtra, cx: &App) -> Stateful<Div> {
     let p = pal(cx);
     let v = v.clone();
     div()
@@ -227,17 +363,38 @@ fn more_button(id: SharedString, v: &VideoItem, cx: &App) -> Stateful<Div> {
         .size_8()
         .rounded_full()
         .cursor_pointer()
+        .invisible()
+        .group_hover("card", |s| s.visible())
         .hover(move |s| s.bg(p.hover))
         .child(icon("ellipsis-vertical").size_4().text_color(p.text))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |ev, window, cx| {
             cx.stop_propagation();
-            open_menu(ev.position(), video_menu_items(&v), window, cx);
+            open_menu(ev.position(), menu_with(&v, &extra), window, cx);
         })
 }
 
 fn watch_route(v: &VideoItem) -> Route {
-    Route::Watch { id: v.id.clone(), playlist: None, start: None }
+    match &v.playlist_id {
+        // a show's own list ("OL…") plays the latest episode with the episodes queued,
+        // a YouTube Mix ("RD…") the song with the radio queued after it
+        Some(list) if list.starts_with("OL") || list.starts_with("RD") => {
+            Route::Watch { id: v.id.clone(), playlist: Some(list.clone()), start: None }
+        }
+        // any other show opens its page, a list of episodes, like on YouTube
+        Some(list) => Route::Playlist(list.clone()),
+        None => Route::Watch { id: v.id.clone(), playlist: None, start: None },
+    }
+}
+
+fn video_title(id: impl Into<ElementId>, title: String) -> Stateful<Div> {
+    let title = SharedString::from(title);
+    let full_title = title.clone();
+    div()
+        .id("video-title")
+        .text_ellipsis().line_clamp(2)
+        .tooltip(move |window, cx| Tooltip::new(full_title.clone()).max_w(px(420.)).build(window, cx))
+        .child(gpui_kit::base::SelectableText::new(id, title))
 }
 
 fn middle_click_tab(route: Route) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
@@ -279,6 +436,7 @@ pub fn video_card(v: &VideoItem, width: Pixels, show_channel: bool, cx: &mut App
     div()
         .id(SharedString::from(format!("vc-{}", v.id)))
         .on_hover(prefetch_hover(&v.id))
+        .relative()
         .flex()
         .flex_col()
         .w(width)
@@ -286,7 +444,14 @@ pub fn video_card(v: &VideoItem, width: Pixels, show_channel: bool, cx: &mut App
         .cursor_pointer()
         .group("card")
         .on_aux_click(middle_click_tab(route.clone()))
-        .on_click(move |_, window, cx| navigate(route.clone(), window, cx))
+        .on_mouse_down(MouseButton::Right, right_click_menu(v, MenuExtra::default()))
+        .on_click(move |_, window, cx| {
+            if has_text_selection(window, cx) {
+                return;
+            }
+            navigate(route.clone(), window, cx)
+        })
+        .child(hover_backdrop(cx))
         .child(thumbnail(v, thumb, width, h, px(12.), cx))
         .child(
             div()
@@ -315,12 +480,10 @@ pub fn video_card(v: &VideoItem, width: Pixels, show_channel: bool, cx: &mut App
                         .min_w_0()
                         .gap_1()
                         .child(
-                            div()
+                            video_title(SharedString::from(format!("vct-{}", v.id)), title)
                                 .text_base()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(p.text)
-                                .line_clamp(2)
-                                .child(title),
+                                .text_color(p.text),
                         )
                         .when(show_channel && !v.channel_name.is_empty(), |d| {
                             let cr = channel_route.clone();
@@ -333,11 +496,14 @@ pub fn video_card(v: &VideoItem, width: Pixels, show_channel: bool, cx: &mut App
                                     .truncate()
                                     .on_click(move |_, window, cx| {
                                         cx.stop_propagation();
+                                        if has_text_selection(window, cx) {
+                                            return;
+                                        }
                                         if let Some(r) = cr.clone() {
                                             navigate(r, window, cx);
                                         }
                                     })
-                                    .child(v.channel_name.clone()),
+                                    .child(gpui_kit::base::SelectableText::new(SharedString::from(format!("vcn-{}", v.id)), v.channel_name.clone())),
                             )
                         })
                         .child(div().text_sm().text_color(p.text2).truncate().child(meta)),
@@ -358,13 +524,22 @@ pub fn shorts_card(v: &VideoItem, width: Pixels, cx: &mut App) -> AnyElement {
     let h = width * (16. / 9.);
     div()
         .id(SharedString::from(format!("sc-{}", v.id)))
+        .relative()
         .flex()
         .flex_col()
         .w(width)
         .gap_2()
         .cursor_pointer()
+        .group("card")
         .on_aux_click(middle_click_tab(route.clone()))
-        .on_click(move |_, window, cx| navigate(route.clone(), window, cx))
+        .on_mouse_down(MouseButton::Right, right_click_menu(v, MenuExtra::default()))
+        .on_click(move |_, window, cx| {
+            if has_text_selection(window, cx) {
+                return;
+            }
+            navigate(route.clone(), window, cx)
+        })
+        .child(hover_backdrop(cx))
         .child(thumbnail(v, thumb, width, h, px(12.), cx))
         .child(
             div()
@@ -376,7 +551,7 @@ pub fn shorts_card(v: &VideoItem, width: Pixels, cx: &mut App) -> AnyElement {
                         .flex_col()
                         .flex_1()
                         .min_w_0()
-                        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).line_clamp(2).child(title))
+                        .child(video_title(SharedString::from(format!("sct-{}", v.id)), title).text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text))
                         .when_some(v.views_text.clone(), |d, vt| d.child(div().text_xs().text_color(p.text2).child(vt))),
                 )
                 .child(more_button(SharedString::from(format!("sm-{}", v.id)), v, cx)),
@@ -395,12 +570,21 @@ pub fn video_row(v: &VideoItem, thumb_w: Pixels, cx: &mut App) -> AnyElement {
     div()
         .id(SharedString::from(format!("vr-{}", v.id)))
         .on_hover(prefetch_hover(&v.id))
+        .relative()
         .flex()
         .gap_4()
         .w_full()
         .cursor_pointer()
+        .group("card")
         .on_aux_click(middle_click_tab(route.clone()))
-        .on_click(move |_, window, cx| navigate(route.clone(), window, cx))
+        .on_mouse_down(MouseButton::Right, right_click_menu(v, MenuExtra::default()))
+        .on_click(move |_, window, cx| {
+            if has_text_selection(window, cx) {
+                return;
+            }
+            navigate(route.clone(), window, cx)
+        })
+        .child(hover_backdrop(cx))
         .child(thumbnail(v, thumb, thumb_w, thumb_w * (9. / 16.), px(12.), cx))
         .child(
             div()
@@ -413,7 +597,7 @@ pub fn video_row(v: &VideoItem, thumb_w: Pixels, cx: &mut App) -> AnyElement {
                     div()
                         .flex()
                         .gap_2()
-                        .child(div().flex_1().text_lg().text_color(p.text).line_clamp(2).child(title))
+                        .child(video_title(SharedString::from(format!("vrt-{}", v.id)), title).flex_1().text_lg().text_color(p.text))
                         .child(more_button(SharedString::from(format!("vrm-{}", v.id)), v, cx)),
                 )
                 .child(div().text_xs().text_color(p.text2).child(meta))
@@ -431,23 +615,38 @@ pub fn video_row(v: &VideoItem, thumb_w: Pixels, cx: &mut App) -> AnyElement {
                             .hover(move |s| s.text_color(p.text))
                             .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
+                                if has_text_selection(window, cx) {
+                                    return;
+                                }
                                 if let Some(r) = cr.clone() {
                                     navigate(r, window, cx);
                                 }
                             })
                             .child(avatar(v.channel_avatar.as_deref(), px(24.), &v.channel_name, cx))
-                            .child(v.channel_name.clone()),
+                            .child(gpui_kit::base::SelectableText::new(SharedString::from(format!("vrcn-{}", v.id)), v.channel_name.clone())),
                     )
                 })
                 .when_some(v.description_snippet.clone(), |d, s| {
-                    d.child(div().text_xs().text_color(p.text2).line_clamp(2).child(s))
+                    d.child(
+                        div()
+                            .text_xs()
+                            .text_color(p.text2)
+                            .text_ellipsis().line_clamp(2)
+                            .child(gpui_kit::base::SelectableText::new(SharedString::from(format!("vrd-{}", v.id)), s)),
+                    )
                 }),
         )
         .into_any_element()
 }
 
-/// Compact row used for related videos / queues.
-pub fn compact_row(v: &VideoItem, active: bool, on_click: Option<Arc<dyn Fn(&mut Window, &mut App)>>, cx: &mut App) -> AnyElement {
+/// Compact playlist or queue row with its own menu actions.
+pub fn compact_row_with(v: &VideoItem, active: bool, on_click: Option<Arc<dyn Fn(&mut Window, &mut App)>>, extra: impl Into<MenuExtra>, cx: &mut App) -> AnyElement {
+    compact_row(v, size(px(168.), px(94.)), active, on_click, extra, cx)
+}
+
+/// A compact row with its thumbnail at `thumb_size`; `extra` items go into the video's menu.
+pub fn compact_row(v: &VideoItem, thumb_size: Size<Pixels>, active: bool, on_click: Option<Arc<dyn Fn(&mut Window, &mut App)>>, extra: impl Into<MenuExtra>, cx: &mut App) -> AnyElement {
+    let extra = extra.into();
     let p = pal(cx);
     let (title, thumb) = branded(v, cx);
     let thumb = if thumb == v.thumbnail {
@@ -465,14 +664,21 @@ pub fn compact_row(v: &VideoItem, active: bool, on_click: Option<Arc<dyn Fn(&mut
         .p_1()
         .rounded_lg()
         .cursor_pointer()
+        .group("card")
         .when(active, |d| d.bg(p.hover))
         .hover(move |s| s.bg(p.surface))
         .on_aux_click(middle_click_tab(route.clone()))
-        .on_click(move |_, window, cx| match &on_click {
-            Some(f) => f(window, cx),
-            None => navigate(route.clone(), window, cx),
+        .on_mouse_down(MouseButton::Right, right_click_menu(v, extra.clone()))
+        .on_click(move |_, window, cx| {
+            if has_text_selection(window, cx) {
+                return;
+            }
+            match &on_click {
+                Some(f) => f(window, cx),
+                None => navigate(route.clone(), window, cx),
+            }
         })
-        .child(thumbnail(v, thumb, px(168.), px(94.), px(8.), cx))
+        .child(thumbnail(v, thumb, thumb_size.width, thumb_size.height, px(8.), cx))
         .child(
             div()
                 .flex()
@@ -480,17 +686,35 @@ pub fn compact_row(v: &VideoItem, active: bool, on_click: Option<Arc<dyn Fn(&mut
                 .flex_1()
                 .min_w_0()
                 .gap_1()
-                .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).line_clamp(2).child(title))
-                .child(div().text_xs().text_color(p.text2).truncate().child(v.channel_name.clone()))
+                .child(video_title(SharedString::from(format!("crt-{}", v.id)), title).text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text))
+                .child({
+                    // the channel name opens the channel, like on youtube.com; the rest of the row opens the video
+                    let cid = v.channel_id.clone();
+                    div()
+                        .id(SharedString::from(format!("crc-{}", v.id)))
+                        .text_xs()
+                        .text_color(p.text2)
+                        .truncate()
+                        .when(cid.is_some(), |d| d.cursor_pointer().hover(move |s| s.text_color(p.text)))
+                        .on_click(move |_, window, cx| {
+                            let Some(id) = cid.clone() else { return };
+                            cx.stop_propagation();
+                            if has_text_selection(window, cx) {
+                                return;
+                            }
+                            navigate(Route::Channel(id), window, cx);
+                        })
+                        .child(gpui_kit::base::SelectableText::new(SharedString::from(format!("crn-{}", v.id)), v.channel_name.clone()))
+                })
                 .child(div().text_xs().text_color(p.text2).truncate().child(meta_line(v))),
         )
-        .child(more_button(SharedString::from(format!("crm-{}", v.id)), v, cx))
+        .child(more_button_with(SharedString::from(format!("crm-{}", v.id)), v, extra, cx))
         .into_any_element()
 }
 
 // ───────────────────────── channel & playlist ─────────────────────────
 
-pub fn channel_row(c: &ChannelItem, cx: &mut App) -> AnyElement {
+pub fn channel_row(c: &ChannelItem, thumb_w: Pixels, cx: &mut App) -> AnyElement {
     let p = pal(cx);
     let id = c.id.clone();
     let subscribed = store::is_subscribed(&c.id);
@@ -503,25 +727,34 @@ pub fn channel_row(c: &ChannelItem, cx: &mut App) -> AnyElement {
         .w_full()
         .py_2()
         .cursor_pointer()
-        .on_click(move |_, window, cx| navigate(Route::Channel(id.clone()), window, cx))
-        .child(div().w(px(360.)).flex().justify_center().child(avatar(c.avatar.as_deref(), px(136.), &c.name, cx)))
+        .on_click(move |_, window, cx| {
+            if has_text_selection(window, cx) {
+                return;
+            }
+            navigate(Route::Channel(id.clone()), window, cx)
+        })
+        .child(div().w(thumb_w).flex_none().flex().justify_center().child(avatar(c.avatar.as_deref(), px(136.).min(thumb_w), &c.name, cx)))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .flex_1()
+                .min_w_0()
                 .gap_1()
-                .child(div().text_lg().text_color(p.text).child(c.name.clone()))
+                .child(div().text_lg().text_color(p.text).child(gpui_kit::base::SelectableText::new(SharedString::from(format!("chr-n-{}", c.id)), c.name.clone())))
                 .child(
-                    div().text_xs().text_color(p.text2).child(
-                        [c.handle.clone(), c.subscribers_text.clone(), c.video_count_text.clone()]
+                    div().text_xs().text_color(p.text2).child(gpui_kit::base::SelectableText::new(
+                        SharedString::from(format!("chr-m-{}", c.id)),
+                        [c.handle.clone(), c.subscribers_text.clone().filter(|_| !store::settings_snapshot().hide_subscriber_counts), c.video_count_text.clone()]
                             .into_iter()
                             .flatten()
                             .collect::<Vec<_>>()
                             .join(" • "),
-                    ),
+                    )),
                 )
-                .when_some(c.description.clone(), |d, s| d.child(div().text_xs().text_color(p.text2).line_clamp(2).child(s))),
+                .when_some(c.description.clone(), |d, s| {
+                    d.child(div().text_xs().text_color(p.text2).text_ellipsis().line_clamp(2).child(gpui_kit::base::SelectableText::new(SharedString::from(format!("chr-d-{}", c.id)), s)))
+                }),
         )
         .child(subscribe_button(SharedString::from(format!("chs-{}", c.id)), &c2, subscribed, cx))
         .into_any_element()
@@ -588,10 +821,15 @@ pub fn channel_card(c: &ChannelItem, width: Pixels, cx: &mut App) -> AnyElement 
         .w(width)
         .py_4()
         .cursor_pointer()
-        .on_click(move |_, window, cx| navigate(Route::Channel(id.clone()), window, cx))
+        .on_click(move |_, window, cx| {
+            if has_text_selection(window, cx) {
+                return;
+            }
+            navigate(Route::Channel(id.clone()), window, cx)
+        })
         .child(avatar(c.avatar.as_deref(), px(104.), &c.name, cx))
-        .child(div().text_base().text_color(p.text).text_center().line_clamp(1).child(c.name.clone()))
-        .when_some(c.subscribers_text.clone(), |d, s| d.child(div().text_xs().text_color(p.text2).child(s)))
+        .child(div().text_base().text_color(p.text).text_center().text_ellipsis().line_clamp(1).child(gpui_kit::base::SelectableText::new(SharedString::from(format!("ccn-{}", c.id)), c.name.clone())))
+        .when_some(c.subscribers_text.clone().filter(|_| !store::settings_snapshot().hide_subscriber_counts), |d, s| d.child(div().text_xs().text_color(p.text2).child(s)))
         .child(subscribe_button(SharedString::from(format!("ccs-{}", c.id)), c, subscribed, cx))
         .into_any_element()
 }
@@ -607,14 +845,26 @@ pub fn playlist_card(pl: &PlaylistItem, width: Pixels, cx: &mut App) -> AnyEleme
         .w(width)
         .gap_3()
         .cursor_pointer()
-        .on_click(move |_, window, cx| navigate(Route::Playlist(id.clone()), window, cx))
+        .on_click(move |_, window, cx| {
+            if has_text_selection(window, cx) {
+                return;
+            }
+            navigate(Route::Playlist(id.clone()), window, cx)
+        })
         .child(playlist_thumb(pl.thumbnail.clone(), pl.video_count_text.clone(), width, h, cx))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(p.text).line_clamp(2).child(pl.title.clone()))
+                .child(
+                    div()
+                        .text_base()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(p.text)
+                        .text_ellipsis().line_clamp(2)
+                        .child(gpui_kit::base::SelectableText::new(SharedString::from(format!("pct-{}", pl.id)), pl.title.clone())),
+                )
                 .when_some(pl.channel_name.clone(), |d, c| d.child(div().text_sm().text_color(p.text2).truncate().child(c)))
                 .child(div().text_sm().text_color(p.text2).child(t("View full playlist"))),
         )
@@ -623,6 +873,8 @@ pub fn playlist_card(pl: &PlaylistItem, width: Pixels, cx: &mut App) -> AnyEleme
 
 pub fn playlist_thumb(thumb: Option<String>, count: Option<String>, w: Pixels, h: Pixels, cx: &App) -> Div {
     let p = pal(cx);
+    let scale = thumbnail_corner_scale();
+    let radius = rems(0.75 * scale);
     div()
         .relative()
         .w(w)
@@ -635,17 +887,17 @@ pub fn playlist_thumb(thumb: Option<String>, count: Option<String>, w: Pixels, h
                 .left(px(12.))
                 .right(px(12.))
                 .h_4()
-                .rounded_t_lg()
+                .rounded_t(rems(0.5 * scale))
                 .bg(p.hover),
         )
         .child(
             div()
                 .relative()
                 .size_full()
-                .rounded_xl()
+                .rounded(radius)
                 .overflow_hidden()
                 .bg(p.surface)
-                .when_some(thumb, |d, t| d.child(img(SharedString::from(t)).size_full().object_fit(ObjectFit::Cover)))
+                .when_some(thumb, |d, t| d.child(img(SharedString::from(t)).size_full().rounded(radius).object_fit(ObjectFit::Cover)))
                 .child(
                     div()
                         .absolute()
@@ -665,7 +917,7 @@ pub fn playlist_thumb(thumb: Option<String>, count: Option<String>, w: Pixels, h
         )
 }
 
-pub fn playlist_row(pl: &PlaylistItem, cx: &mut App) -> AnyElement {
+pub fn playlist_row(pl: &PlaylistItem, thumb_w: Pixels, cx: &mut App) -> AnyElement {
     let p = pal(cx);
     let id = pl.id.clone();
     div()
@@ -674,15 +926,21 @@ pub fn playlist_row(pl: &PlaylistItem, cx: &mut App) -> AnyElement {
         .gap_4()
         .w_full()
         .cursor_pointer()
-        .on_click(move |_, window, cx| navigate(Route::Playlist(id.clone()), window, cx))
-        .child(playlist_thumb(pl.thumbnail.clone(), pl.video_count_text.clone(), px(360.), px(202.), cx))
+        .on_click(move |_, window, cx| {
+            if has_text_selection(window, cx) {
+                return;
+            }
+            navigate(Route::Playlist(id.clone()), window, cx)
+        })
+        .child(playlist_thumb(pl.thumbnail.clone(), pl.video_count_text.clone(), thumb_w, thumb_w * (9. / 16.), cx))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .flex_1()
-                .child(div().text_lg().text_color(p.text).line_clamp(2).child(pl.title.clone()))
+                .min_w_0()
+                .child(div().text_lg().text_color(p.text).text_ellipsis().line_clamp(2).child(gpui_kit::base::SelectableText::new(SharedString::from(format!("prt-{}", pl.id)), pl.title.clone())))
                 .when_some(pl.channel_name.clone(), |d, c| d.child(div().text_xs().text_color(p.text2).child(c)))
                 .child(div().text_xs().text_color(p.text2).font_weight(FontWeight::MEDIUM).child(t("View full playlist"))),
         )

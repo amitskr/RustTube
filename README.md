@@ -39,29 +39,43 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 - Nothing to install or keep updated: it isn't an ad blocker that YouTube can break, ads simply aren't part of how the app plays video
 
 **Watching**
-- Home, Shorts, Subscriptions, Explore categories, channels (including their courses and shows), playlists and search, with search suggestions and your recent searches
+- Home, Shorts, Subscriptions, Explore categories, channels (including their courses and shows), and playlists
+- Search with filters, suggestions, recent searches and more results as you scroll
 - A personal Home without an account: "For you" recommends videos related to what you've watched and searched in the app, mixed with new uploads from your subscriptions. Signed in, Home is your own YouTube Home feed
 - A *Recently uploaded* chip on Home, like youtube.com's: videos from your Home feed and subscriptions uploaded in the last two weeks, newest first
+- Hover a video title in a grid or list to read the full title
 - Ctrl+click a link or middle-click a video to open it in a background tab. A video's menu also has *Open in new tab*. Switch with Ctrl+Tab, Ctrl+1…9 or a click. Ctrl+T opens a new tab. Ctrl+W or a middle click on the tab closes it.
 - Videos made for kids (YouTube Kids) play and download like any other video
 - Old video annotations are back: notes, speech bubbles and clickable links from YouTube's annotation archive, drawn over the video where they used to be (turn them off in *Settings → Player* or from the player's gear menu)
 - Arabic, Hebrew and other right-to-left text is shown in the right order
 - Shorts follow your account's recommendations when you're signed in, or start from the Shorts you watched last
+- Download the current Short from the vertical player's download button
 - libmpv player with hardware decoding, codec preference (AV1, VP9 or H.264), 360p up to 4K, enhanced bitrate, speed control (remembered per channel if you want), captions you can style (font, colour, opacity, background and edge, with a live preview), chapters and seek-bar preview thumbnails
 - A chapters panel beside the player, like youtube.com: click the chapter name in the player bar (or *View all* under the description) to list every chapter with its thumbnail, follow the one playing, and jump to any of them
 - Timestamps in descriptions and comments seek the video and bring the player back into view
 - Resumes where you left off, remembers your last quality, autoplays the next video or loops, and plays whole playlists as a queue
-- A miniplayer while you browse that you can drag anywhere and resize (it remembers where you put it), a picture-in-picture window, theater mode and fullscreen. Theater mode is saved between launches and can be set in *Settings → Player*.
+- Turn on *Original video titles* in Settings to show the creator's title when opening a video.
+- Hover over the video to step through available resolutions or adjust playback speed in 0.5× increments. Click the speed to reset it to 1×.
+- The picture-in-picture button opens the draggable in-app miniplayer or a floating window above other apps. Choose the mode in *Settings → Player*. Theater mode and fullscreen are also available, and the app remembers your theater setting.
 - Keeps playing when minimized, or pauses and resumes when you come back. On Windows, active video playback keeps the display awake.
+- Windows media controls can pause playback, resume it and move through the video queue.
+- Music: signed in, *Explore → Music* shows YouTube's music picks for your account, and each song plays on as its mix. Music mode, offered when a mix starts or from the player's note button, works like YouTube Music: a player bar along the bottom of every page and a *Now playing* view with the cover art or the video beside what plays next.
+- On Windows, *Settings → General → Minimize to tray* keeps Stream Tube in the notification area when you minimize or close the window. Use the tray icon to reopen or quit the app.
+- Start *Cast over LAN* in Settings and open the temporary link on a phone on the same trusted network. If the desktop has more than one local address, choose the one on your phone's network. Paste a YouTube video link to play it on the desktop.
+- Turn on *Independent tab playback* and restart Stream Tube to play up to three tabs at once. Each tab keeps its own queue. Background tabs play audio, and a tab with a floating picture-in-picture window keeps showing video there.
 - Live streams with live chat (Top chat or every message), and chatting when signed in
 - Shorts in a vertical player that moves to the next one by itself, or open them in the regular player. Shorts comments open their replies as threads too
 - Hold Space or press and hold the main video to play at 2x
+- Press `+` / `-` or `>` / `<` to move to the next or previous 0.25x playback speed step
 - Hover previews: rest the pointer on a thumbnail and it plays inside it, muted, with a seek bar to skip around
 - Most replayed graph with "jump ahead", ambient glow around the player (on or off from the player's gear menu), force original audio instead of auto-dubbing
+- Aspect ratio controls for ultrawide screens, like the Ultrawidify extension: *Auto* finds a film's black bars and crops them away so it fills a 21:9 or 32:9 monitor, or pick 21:9, 18:9 or 32:9, *Zoom to fill* or *Stretch*. Choose it from the player's gear menu or *Settings → Player*, or press *Z* to cycle
 - A screenshot button in the player bar
+- Step one frame at a time with `,` or `.` while paused, or with Previous frame and Next frame in the player's right-click menu
 - Comments sorted by Top, Timed or Newest. *Timed* works like youtube.com: comments that mention a moment of the video appear as playback reaches it
 - Comments show animated GIFs, stickers and channel emojis, and replies are drawn as threads, with answers to a reply nested under it. Long comments and channel descriptions are shortened with *Read more* / *Show more*
-- Keyboard shortcuts for everything you'd expect (play/pause, seek, volume, captions, fullscreen, theater, picture-in-picture, next/previous, and Ctrl+←/→ for the previous/next chapter)
+- Keyboard shortcuts for playback, seek, volume, captions, fullscreen, theater, picture-in-picture and the queue. Z changes the aspect ratio and Ctrl+←/→ changes chapters. Playback letter keys also work with the Russian layout.
+- Arrow keys briefly show the volume or the number of seconds skipped over the video
 - "Open in external player" with no setup: it uses VLC or mpv if one is installed, otherwise your default video player, and continues from where you were
 - Right-click the video for loop, copy link (optionally at the current time), screenshot and **Stats for nerds**: resolution, codecs, dropped frames, hardware decoding, bitrate, buffer health and connection speed, updated live (also *Shift+I*)
 
@@ -82,14 +96,17 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 
 **Your data stays yours**
 - Subscriptions can live locally. The feed is built by fetching each channel directly, no account needed
-- Or sign in with your Google account to get your own Home feed, subscriptions, playlists, likes and subscribe button
-- Watch history and search history from your other devices sync in, with resume positions, and single entries can be removed
-- Connect your YouTube history (*Settings → General*) and it works the other way too: videos you watch in RustTube show up in your YouTube history, and your phone or TV resumes them where you stopped. You sign in once in a browser window with a fresh profile (Chrome, Edge, Brave or Chromium) that closes and is deleted afterwards, or load a `cookies.txt` file instead
+- Sign in with your Google account to get your own Home feed, subscriptions, playlists, likes and subscribe button. RustTube opens youtube.com/activate in your default browser with the sign-in code already filled in, so you only pick your account and allow access. RustTube imports your YouTube watch history and recent searches automatically after sign-in
+- Sign in to YouTube to open Watch later, Liked videos and any account Favorites playlist from the sidebar. The local playlists are available in Library.
+- Signed in, a video that asks to confirm you're not a bot, or an age-restricted one, plays through YouTube's TV client as your account. Other videos start through the faster default client, and your views still reach the account. The JavaScript puzzles in YouTube's stream URLs are solved with the scripts from [yt-dlp/ejs](https://github.com/yt-dlp/ejs) in a built-in QuickJS engine, or in [Deno](https://deno.com) or [Node.js](https://nodejs.org) when one is installed, which is a few times faster
+- Videos you watch in RustTube and the positions you stop at go back to your YouTube account through the same sign-in, so other devices resume where you left off. If you prefer, connect a browser session instead under *Settings → General → YouTube watch history*: sign in with a fresh browser profile (Chrome, Edge, Brave or Chromium) that is deleted afterwards, or load a `cookies.txt` file
+- Your YouTube watch history refreshes in the background and when you return to RustTube
 - History, watch later, favourites and playlists are stored in a local SQLite database, and you can pause or clear history at any time
 - Import from YouTube Takeout, NewPipe, FreeTube or OPML. Export to NewPipe JSON, YouTube CSV, OPML or a full backup
 
 **Downloads**
 - Download video or audio in any quality through yt-dlp, with SponsorBlock chapters, from a download manager with progress
+- Save a transcript as plain text (.txt) or timestamped subtitles (.srt) from the Download menu. A single caption track downloads immediately. If several tracks are available, choose the language; automatically generated tracks are labeled in the picker.
 - Without yt-dlp it falls back to the built-in downloader (360p/720p or audio)
 - yt-dlp and FFmpeg can be fetched from inside the app, on Windows and Linux (*Settings → Downloads*), with a progress bar, so nothing has to be installed by hand
 
@@ -100,7 +117,7 @@ goes through libmpv, so it starts fast and scrolls smoothly even with big feeds.
 **Network**
 - A proxy setting (HTTP or SOCKS) that covers browsing, playback, thumbnails, downloads and sign-in
 - On Linux, a choice of Wayland or X11, with an automatic switch to X11 if a Wayland window never shows up (ChromeOS)
-- IPv4-only mode applies to new requests as soon as you change it. You can also choose a playback client (visionOS, Android VR or yt-dlp).
+- IPv4-only mode applies to new requests as soon as you change it. You can also choose a playback client (TV, visionOS, Android VR or yt-dlp).
 
 **Looks the way you like**
 - Dark, light or follow system (macOS / Windows / Linux)
@@ -130,7 +147,6 @@ browse: thumbnails are kept at the size they're drawn and the ones you've scroll
 past are freed. While playing, part of the memory is a read-ahead buffer that keeps
 seeking instant. Turn on *Settings → Player → Hardware decoding* to decode video on
 the GPU like the browser does. Results depend on the video, resolution and hardware.
-
 ## Screenshots
 
 <table>
@@ -176,8 +192,12 @@ This is an early alpha, so expect rough edges.
 **Windows 10/11 (64-bit)**: run `RustTube-<version>-setup.exe`. It installs for
 your user only, so no administrator prompt, and the app updates itself when a new
 release comes out (*Settings → About*).
-To run it without installing, unzip `RustTube-<version>-windows-x64.zip` and run
-`rusttube.exe`. It doesn't need the Visual C++ runtime.
+To run it without installing, choose *Extract All* on
+`RustTube-<version>-windows-x64.zip`, then open `rusttube.exe` in the extracted
+folder with `libmpv-2.dll` beside it. It doesn't need the Visual C++ runtime.
+After you extract a build with portable update support, use *Settings → About*
+for future updates. RustTube replaces the app files in that folder and
+restarts with the same settings and history.
 Older PCs whose graphics driver has no Vulkan support (for example Intel HD 4000)
 work too: the app carries its own Vulkan loader for libmpv and uses it only when
 Windows doesn't have one.
@@ -185,21 +205,21 @@ Windows doesn't have one.
 **Debian, Ubuntu, Mint**: install the `.deb`. This also installs libmpv:
 
 ```sh
-sudo apt install ./rusttube_1.1.0_amd64.deb
+sudo apt install ./rusttube_1.2.0_amd64.deb
 ```
 
 **Fedora, openSUSE**: install the `.rpm`:
 
 ```sh
-sudo dnf install ./rusttube-1.1.0.x86_64.rpm
+sudo dnf install ./rusttube-1.2.0.x86_64.rpm
 ```
 
 **Any Linux (x86_64), nothing to install**: download the AppImage, make it executable
 and run it. libmpv is inside, so video plays without installing anything else:
 
 ```sh
-chmod +x RustTube-1.1.0-x86_64.AppImage
-./RustTube-1.1.0-x86_64.AppImage
+chmod +x RustTube-1.2.0-x86_64.AppImage
+./RustTube-1.2.0-x86_64.AppImage
 ```
 
 **Other Linux (x86_64), installed for your user**: unpack `RustTube-<version>-linux-x86_64.tar.gz` and run
@@ -224,11 +244,11 @@ and each file has a signed build provenance attestation that ties it to the work
 run that built it. With the [GitHub CLI](https://cli.github.com):
 
 ```sh
-gh attestation verify RustTube-1.1.0-macos.dmg --repo amitskr/RustTube
+gh attestation verify RustTube-1.2.0-macos.dmg --repo amitskr/RustTube
 ```
 
-Releases are immutable once published, so their files can't be swapped afterwards.
-The in-app updater also checks the installer's SHA-256 before running it.
+Check a download against those before running it. The in-app updater also checks
+the installer's SHA-256 before running it.
 
 ## Building
 
@@ -265,7 +285,7 @@ The executable ends up at `target/release/rusttube` (or `target\release\rusttube
 To build the Windows installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
-ISCC.exe /DAppVersion=1.1.0 installer\rusttube.iss
+ISCC.exe /DAppVersion=1.2.0 installer\rusttube.iss
 ```
 
 It lands in `dist\`. On Linux, install the packages listed in
@@ -300,8 +320,8 @@ src/
 
 ## Known issues
 
-- YouTube sometimes answers with "Sign in to confirm you're not a bot". When that
-  happens, signing in inside the app or updating yt-dlp usually fixes it.
+- YouTube sometimes answers with "Sign in to confirm you're not a bot". Signing in
+  inside the app avoids it; otherwise updating yt-dlp usually fixes it.
 - Supported across macOS (Apple Silicon & Intel), Windows 10/11 (x64), and Linux (x86_64).
 
 ## Contributing
@@ -317,6 +337,9 @@ RustTube is a fork of [Stream-Tube-Desktop](https://github.com/Avaneesh-Inamdar/
 [Return YouTube Dislike](https://returnyoutubedislike.com),
 [GPUI](https://www.gpui.rs), [FFmpeg](https://ffmpeg.org) and the annotation archive saved by
 [Archive Team](https://wiki.archiveteam.org/index.php/YouTube/Annotations).
+
+Thanks also to everyone who has sent fixes and features; each release's notes name
+who did what, and the full list is on the [contributors page](https://github.com/Avaneesh-Inamdar/Stream-Tube-Desktop/graphs/contributors).
 
 It's an independent project and isn't affiliated with or endorsed by YouTube or Google.
 

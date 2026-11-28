@@ -11,10 +11,11 @@ use std::rc::Rc;
 use futures::channel::oneshot;
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
-/// Web images are decoded no larger than this (Shorts covers come as 1080x1920,
-/// but are never drawn that big); every image stays decoded in memory.
-const MAX_W: u32 = 1280;
-const MAX_H: u32 = 720;
+/// Web images are decoded to at most this many pixels (854x480), keeping their
+/// shape: cards get 1280x720 thumbnails but draw them about 350 px wide, so
+/// decoding them whole took 3.7 MB each (and as much again on the GPU). Wide
+/// channel banners still come out about 1570 px wide.
+const MAX_PIXELS: u64 = 854 * 480;
 
 type LoadResult = Result<Arc<RenderImage>, ImageCacheError>;
 
@@ -110,8 +111,8 @@ fn fetch_decode(url: &str) -> anyhow::Result<Arc<RenderImage>> {
     }
     let img = image::load_from_memory(&bytes)?;
     let (w, h) = (img.width(), img.height());
-    let mut rgba = if w > MAX_W || h > MAX_H {
-        let k = (MAX_W as f32 / w as f32).min(MAX_H as f32 / h as f32);
+    let mut rgba = if w as u64 * h as u64 > MAX_PIXELS {
+        let k = (MAX_PIXELS as f64 / (w as f64 * h as f64)).sqrt() as f32;
         let (nw, nh) = (((w as f32 * k).round() as u32).max(1), ((h as f32 * k).round() as u32).max(1));
         image::imageops::resize(&img.into_rgba8(), nw, nh, image::imageops::FilterType::Triangle)
     } else {
@@ -180,7 +181,7 @@ fn animated(bytes: &[u8]) -> Option<smallvec::SmallVec<[image::Frame; 1]>> {
 }
 
 /// Decoded images above this are freed, least recently shown first.
-const BUDGET_BYTES: usize = 160 * 1024 * 1024;
+const BUDGET_BYTES: usize = 48 * 1024 * 1024;
 
 struct Entry {
     item: Slot,
